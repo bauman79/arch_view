@@ -1,0 +1,526 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: "Apple SD Gothic Neo", "Pretendard", system-ui, sans-serif;
+  font-size: 14px;
+  color: #e4e6eb;
+  background: #17191d;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  height: calc(100% - 28px);
+}
+
+#panel {
+  width: 280px;
+  flex: none;
+  background: #1f2228;
+  border-right: 1px solid #33363d;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+#panel h1 {
+  font-size: 17px;
+  margin-bottom: 12px;
+}
+
+.milestone {
+  font-size: 11px;
+  color: #8ab4f8;
+  border: 1px solid #8ab4f8;
+  border-radius: 4px;
+  padding: 1px 5px;
+  vertical-align: middle;
+}
+
+.panel-section {
+  border-top: 1px solid #33363d;
+  padding: 12px 0;
+}
+
+.panel-section h2 {
+  font-size: 13px;
+  color: #9aa0a6;
+  margin-bottom: 8px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.row label {
+  flex: none;
+  color: #bdc1c6;
+}
+
+select,
+input[type="number"],
+input[type="text"],
+button {
+  background: #2a2e35;
+  color: #e4e6eb;
+  border: 1px solid #44484f;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+input[type="file"] {
+  width: 100%;
+  font-size: 12px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover {
+  background: #363b44;
+}
+
+.hint {
+  font-size: 12px;
+  color: #9aa0a6;
+  line-height: 1.6;
+}
+
+code {
+  background: #2a2e35;
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+#viewport {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+
+#viewport canvas {
+  display: block;
+}
+
+#statusbar {
+  height: 28px;
+  line-height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: #9aa0a6;
+  background: #1f2228;
+  border-top: 1px solid #33363d;
+}
+
+/* 건물 카드 — 아코디언(헤더는 항상 보임, 본문은 펼쳤을 때만) */
+.building-card {
+  border: 1px solid #33363d;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: #23262c;
+  overflow: hidden;
+}
+
+.building-card.selected {
+  border-color: #8ab4f8;
+}
+
+.list-section-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: #7d838c;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 10px 0 4px;
+}
+
+.list-section-heading:first-child {
+  margin-top: 0;
+}
+
+.accordion-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.accordion-header:hover {
+  background: #282c33;
+}
+
+.accordion-arrow {
+  flex: none;
+  width: 10px;
+  font-size: 9px;
+  color: #9aa0a6;
+}
+
+.accordion-header .bname {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floor-badge {
+  flex: none;
+  font-size: 11px;
+  color: #9aa0a6;
+  background: #2a2e35;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.status-dots {
+  display: flex;
+  flex: none;
+  gap: 3px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4a4e57; /* na — 미적용/미실행 */
+}
+
+.status-dot.pass {
+  background: #4caf7d;
+}
+
+.status-dot.fail {
+  background: #e5484d;
+}
+
+.delete-btn {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 5px;
+  line-height: 1.4;
+  background: transparent;
+  border-color: transparent;
+}
+
+.delete-btn:hover {
+  background: #4a2626;
+  border-color: #7a3a3a;
+}
+
+.accordion-body {
+  padding: 8px 10px 10px;
+  border-top: 1px solid #33363d;
+}
+
+.accordion-actions {
+  margin-top: 6px;
+}
+
+.duplicate-btn {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+.building-card .name-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.building-card .bname {
+  font-weight: 600;
+}
+
+.badge {
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.badge.plan {
+  background: #1a3a5c;
+  color: #8ab4f8;
+}
+
+.badge.adj {
+  background: #3a3d42;
+  color: #bdc1c6;
+}
+
+.building-card .num-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.building-card .num-row label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #bdc1c6;
+}
+
+.building-card input[type="number"] {
+  width: 58px;
+}
+
+.building-card .height-info {
+  font-size: 11px;
+  color: #9aa0a6;
+}
+
+/* M6 — 세대수 표시 */
+.building-card .unit-info {
+  font-size: 11px;
+  color: #8ab4f8;
+  margin-top: 4px;
+}
+
+/* M6.7 — 평형별 세대수 직접 입력(추가/삭제 가능) */
+.building-card .unit-mix-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.building-card .mix-row {
+  align-items: center;
+  gap: 6px;
+}
+
+.building-card .unit-type-name {
+  width: 56px;
+  font-size: 11px;
+}
+
+.building-card .mix-row input[type="number"] {
+  width: 46px;
+}
+
+.building-card .mix-unit-suffix {
+  font-size: 11px;
+  color: #9aa0a6;
+}
+
+.building-card .mix-calc {
+  font-size: 11px;
+  color: #8ab4f8;
+  white-space: nowrap;
+}
+
+.building-card .mix-remove {
+  font-size: 11px;
+  padding: 1px 6px;
+  line-height: 1.4;
+  color: #e5484d;
+}
+
+.building-card .mix-add {
+  font-size: 11px;
+  padding: 2px 6px;
+  margin-bottom: 4px;
+}
+
+.building-card .mix-hint {
+  font-size: 10px;
+  color: #9aa0a6;
+  margin-top: 2px;
+}
+
+/* 건물 라이브러리 — DXF PLAN_BLDG 템플릿 체크박스 목록 */
+#library-list {
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+.library-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #bdc1c6;
+  padding: 3px 0;
+  cursor: pointer;
+}
+
+.library-row input[type="checkbox"] {
+  accent-color: #8ab4f8;
+}
+
+#site-totals {
+  color: #8ab4f8;
+  margin-bottom: 8px;
+}
+
+#bcr-far {
+  margin-bottom: 8px;
+}
+
+.building-card .reset-offset {
+  font-size: 11px;
+  padding: 2px 6px;
+  margin-top: 4px;
+}
+
+/* 미러(좌우/상하반전) */
+.building-card .mirror-row {
+  align-items: center;
+}
+
+.building-card .mirror-row button {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+.building-card .mirror-state {
+  font-size: 11px;
+  color: #9aa0a6;
+}
+
+/* 분석 설정 */
+#panel input[type="number"] {
+  width: 62px;
+}
+
+#panel input[type="date"] {
+  background: #2a2e35;
+  color: #e4e6eb;
+  border: 1px solid #44484f;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  color-scheme: dark;
+}
+
+button.primary {
+  background: #2a5292;
+  border-color: #3a6cb8;
+}
+
+button.primary:hover {
+  background: #33639f;
+}
+
+/* M3 검토 토글 — 켜져 있는 동안 실시간 갱신 */
+button.toggled {
+  background: #2a5c3a;
+  border-color: #3f8a56;
+  color: #c9f2d6;
+}
+
+button.toggled:hover {
+  background: #336b45;
+}
+
+/* 분석 결과 요약 */
+.summary-card {
+  border: 1px solid #33363d;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-top: 8px;
+  background: #23262c;
+  font-size: 12px;
+}
+
+.summary-card .bname {
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.surf-line {
+  color: #bdc1c6;
+  line-height: 1.6;
+}
+
+.surf-line b.ok {
+  color: #6ea8ff;
+}
+
+.surf-line b.bad {
+  color: #f2777c;
+}
+
+/* 시간 슬라이더 오버레이 */
+#time-overlay {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(31, 34, 40, 0.9);
+  border: 1px solid #33363d;
+  border-radius: 8px;
+  padding: 8px 14px;
+  z-index: 5;
+}
+
+#time-overlay #time-label {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+#time-overlay #sun-label {
+  font-size: 12px;
+  color: #9aa0a6;
+  min-width: 150px;
+}
+
+#time-overlay input[type="range"] {
+  width: 240px;
+  accent-color: #8ab4f8;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+
+.modal-overlay[hidden] {
+  display: none;
+}
+
+.modal-box {
+  background: #1f2228;
+  border: 1px solid #33363d;
+  border-radius: 8px;
+  padding: 18px;
+  max-width: 420px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.modal-box h2 {
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+
+.modal-box .row {
+  margin-top: 12px;
+  margin-bottom: 0;
+  justify-content: flex-end;
+}

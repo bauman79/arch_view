@@ -1,0 +1,1314 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>arch_view — 일조·태양광 시뮬레이터</title>
+    <style>
+      /* ============================================================
+         arch_view 다크 테마 — 색상 시스템
+         캔버스 #070D1A · 패널 #0D1525 · 툴바 #0F1929 · 카드 #111827
+         보더 #1E2D4A / #131E35 · 액센트(앰버) #E0921A
+         ============================================================ */
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html,
+      body {
+        height: 100%;
+        font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+        font-size: 13px;
+        color: #cbd5e1;
+        background: #070d1a;
+        overflow: hidden;
+      }
+
+      input,
+      select,
+      button {
+        font-family: inherit;
+      }
+
+      input[type="number"],
+      #time-label,
+      #cursor-coords,
+      .mix-calc,
+      .floor-badge,
+      #status-strip {
+        font-variant-numeric: tabular-nums;
+      }
+
+      input[hidden] {
+        display: none;
+      }
+
+      #shell {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+
+      /* ---------------- 툴바 (44px) ---------------- */
+      #toolbar {
+        flex: none;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 12px;
+        background: #0f1929;
+        border-bottom: 0.5px solid #1e2d4a;
+      }
+
+      #logo {
+        color: #e0921a;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        margin-right: 8px;
+        user-select: none;
+      }
+
+      .tb-spacer {
+        flex: 1;
+      }
+
+      #tb-sun {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .tb-date-label {
+        font-size: 11px;
+        color: #94a3b8;
+      }
+
+      #sun-arc {
+        display: block;
+        overflow: visible;
+      }
+
+      /* ---------------- 버튼 ---------------- */
+      .btn,
+      button {
+        background: #111827;
+        color: #cbd5e1;
+        border: 1px solid #1e2d4a;
+        border-radius: 5px;
+        padding: 4px 10px;
+        font-size: 12px;
+        line-height: 1.5;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.12s, border-color 0.12s;
+      }
+
+      .btn:hover,
+      button:hover {
+        background: #17233a;
+        border-color: #2a3f66;
+      }
+
+      button.primary,
+      .btn.primary {
+        background: #e0921a;
+        border-color: #e0921a;
+        color: #0d1525;
+        font-weight: 600;
+      }
+
+      button.primary:hover,
+      .btn.primary:hover {
+        background: #f0a52e;
+        border-color: #f0a52e;
+      }
+
+      /* M3 검토 토글 — 켜져 있는 동안 실시간 갱신 */
+      button.toggled {
+        background: #123524;
+        border-color: #22c55e;
+        color: #6ee7a0;
+      }
+
+      button.toggled:hover {
+        background: #17422d;
+      }
+
+      .btn.mini,
+      button.mini {
+        font-size: 11px;
+        padding: 3px 8px;
+      }
+
+      .btn.block,
+      button.block {
+        width: 100%;
+        text-align: center;
+      }
+
+      /* ---------------- 폼 요소 ---------------- */
+      select,
+      input[type="number"],
+      input[type="text"],
+      input[type="date"] {
+        background: #111827;
+        color: #cbd5e1;
+        border: 1px solid #1e2d4a;
+        border-radius: 4px;
+        padding: 3px 6px;
+        font-size: 12px;
+        color-scheme: dark;
+      }
+
+      select:focus,
+      input:focus {
+        outline: none;
+        border-color: #e0921a;
+      }
+
+      input[type="checkbox"] {
+        accent-color: #e0921a;
+      }
+
+      input[type="range"] {
+        accent-color: #e0921a;
+      }
+
+      /* ---------------- 본문 3열 ---------------- */
+      #main {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+      }
+
+      /* ---------------- 좌측 패널 (220px) ---------------- */
+      #left-panel {
+        flex: none;
+        width: 220px;
+        background: #0d1525;
+        border-right: 0.5px solid #1e2d4a;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .lp-section {
+        padding: 10px;
+        border-bottom: 0.5px solid #131e35;
+      }
+
+      .lp-section.grow {
+        flex: 1;
+      }
+
+      .lp-heading,
+      #left-panel summary {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #4a6080;
+        margin-bottom: 8px;
+        user-select: none;
+      }
+
+      #left-panel details {
+        margin-bottom: 2px;
+      }
+
+      #left-panel summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 4px 0;
+        margin-bottom: 4px;
+      }
+
+      #left-panel summary::-webkit-details-marker {
+        display: none;
+      }
+
+      #left-panel summary::before {
+        content: "▸";
+        display: inline-block;
+        width: 12px;
+        color: #4a6080;
+        transition: transform 0.12s;
+      }
+
+      #left-panel details[open] > summary::before {
+        content: "▾";
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 7px;
+        flex-wrap: wrap;
+      }
+
+      .row label {
+        flex: none;
+        font-size: 11px;
+        color: #94a3b8;
+      }
+
+      .row input[type="number"] {
+        width: 52px;
+      }
+
+      .mini-label {
+        font-size: 11px;
+        color: #94a3b8;
+      }
+
+      .hint {
+        font-size: 11px;
+        color: #4a6080;
+        line-height: 1.6;
+        margin-bottom: 6px;
+      }
+
+      code {
+        background: #111827;
+        border: 1px solid #131e35;
+        border-radius: 3px;
+        padding: 0 4px;
+        font-size: 10px;
+        color: #94a3b8;
+      }
+
+      .help-hint {
+        margin-top: 8px;
+      }
+
+      /* ---------------- 건물 라이브러리 ---------------- */
+      #library-list {
+        max-height: 150px;
+        overflow-y: auto;
+        margin-bottom: 8px;
+      }
+
+      .library-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: #cbd5e1;
+        padding: 4px 6px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      .library-row:hover {
+        background: #111827;
+      }
+
+      .lib-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .badge {
+        flex: none;
+        font-size: 10px;
+        border-radius: 3px;
+        padding: 1px 5px;
+        line-height: 1.5;
+      }
+
+      .badge.plan {
+        background: rgba(224, 146, 26, 0.14);
+        color: #e0921a;
+      }
+
+      .badge.adj {
+        background: #131e35;
+        color: #94a3b8;
+      }
+
+      .badge.lib-sample {
+        background: #131e35;
+        color: #94a3b8;
+      }
+
+      .badge.lib-dxf {
+        background: rgba(59, 130, 246, 0.14);
+        color: #3b82f6;
+      }
+
+      /* ---------------- 장면 목록 아코디언 ---------------- */
+      .list-section-heading {
+        font-size: 10px;
+        font-weight: 700;
+        color: #4a6080;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin: 10px 0 5px;
+        padding-top: 8px;
+        border-top: 0.5px solid #131e35;
+      }
+
+      .list-section-heading:first-child {
+        margin-top: 0;
+        padding-top: 0;
+        border-top: none;
+      }
+
+      .building-card {
+        border: 1px solid #131e35;
+        border-radius: 6px;
+        margin-bottom: 5px;
+        background: #111827;
+        overflow: hidden;
+      }
+
+      .building-card.selected {
+        border-color: #e0921a;
+      }
+
+      .accordion-header {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 6px 8px;
+        cursor: pointer;
+      }
+
+      .accordion-header:hover {
+        background: #17233a;
+      }
+
+      .accordion-arrow {
+        flex: none;
+        width: 9px;
+        font-size: 8px;
+        color: #4a6080;
+      }
+
+      .accordion-header .bname {
+        flex: 1;
+        min-width: 0;
+        font-size: 12px;
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .floor-badge {
+        flex: none;
+        font-size: 10px;
+        color: #94a3b8;
+        background: #131e35;
+        border-radius: 3px;
+        padding: 1px 4px;
+      }
+
+      .status-dots {
+        display: flex;
+        flex: none;
+        gap: 3px;
+      }
+
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #253550; /* 미검토 */
+      }
+
+      .status-dot.na {
+        background: #334155; /* 해당없음/미실행 */
+      }
+
+      .status-dot.pass {
+        background: #22c55e;
+      }
+
+      .status-dot.fail {
+        background: #ef4444;
+      }
+
+      .delete-btn {
+        flex: none;
+        font-size: 11px;
+        padding: 0 4px;
+        line-height: 1.5;
+        background: transparent;
+        border-color: transparent;
+        color: #4a6080;
+      }
+
+      .delete-btn:hover {
+        background: rgba(239, 68, 68, 0.12);
+        border-color: rgba(239, 68, 68, 0.4);
+        color: #ef4444;
+      }
+
+      .accordion-body {
+        padding: 7px 8px 8px;
+        border-top: 0.5px solid #131e35;
+      }
+
+      .brief-line {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+
+      .brief-height {
+        font-size: 11px;
+        color: #94a3b8;
+      }
+
+      .accordion-actions {
+        margin-top: 6px;
+        margin-bottom: 0;
+      }
+
+      .accordion-actions button {
+        font-size: 11px;
+        padding: 2px 8px;
+      }
+
+      /* ---------------- 우측 패널 (260px) ---------------- */
+      #right-panel {
+        flex: none;
+        width: 260px;
+        background: #0d1525;
+        border-left: 0.5px solid #1e2d4a;
+        overflow-y: auto;
+      }
+
+      #building-detail {
+        padding: 12px 12px 16px;
+      }
+
+      .detail-empty {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        color: #4a6080;
+        font-size: 12px;
+        padding: 60px 12px;
+      }
+
+      .detail-empty span {
+        font-size: 11px;
+        line-height: 1.6;
+      }
+
+      .detail-head {
+        margin-bottom: 10px;
+      }
+
+      .detail-name {
+        font-size: 14px;
+        font-weight: 700;
+        color: #cbd5e1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .detail-type {
+        font-size: 11px;
+        color: #94a3b8;
+        margin-top: 2px;
+      }
+
+      .detail-card {
+        border: none;
+        background: transparent;
+        overflow: visible;
+        margin-bottom: 0;
+      }
+
+      .detail-card .name-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 8px;
+        padding-bottom: 8px;
+        border-bottom: 0.5px solid #131e35;
+      }
+
+      .building-card .num-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 6px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .building-card .num-row label {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        color: #94a3b8;
+      }
+
+      .building-card input[type="number"] {
+        width: 54px;
+      }
+
+      .building-card .height-info {
+        font-size: 11px;
+        color: #94a3b8;
+        margin: 2px 0 8px;
+      }
+
+      .building-card .mirror-row button {
+        font-size: 11px;
+        padding: 2px 7px;
+      }
+
+      .building-card .mirror-state {
+        font-size: 10px;
+        color: #4a6080;
+      }
+
+      /* 평형별 세대수 */
+      .building-card .unit-info {
+        font-size: 11px;
+        color: #e0921a;
+        margin-top: 6px;
+      }
+
+      .building-card .unit-mix-list {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 5px;
+      }
+
+      .building-card .mix-row {
+        align-items: center;
+        gap: 5px;
+        margin-bottom: 0;
+      }
+
+      .building-card .unit-type-name {
+        width: 52px;
+        font-size: 11px;
+      }
+
+      .building-card .mix-row input[type="number"] {
+        width: 42px;
+      }
+
+      .building-card .mix-unit-suffix {
+        font-size: 10px;
+        color: #4a6080;
+      }
+
+      .building-card .mix-calc {
+        font-size: 10px;
+        color: #94a3b8;
+        white-space: nowrap;
+      }
+
+      .building-card .mix-remove {
+        font-size: 11px;
+        padding: 0 5px;
+        line-height: 1.5;
+        color: #ef4444;
+      }
+
+      .building-card .mix-add {
+        font-size: 11px;
+        padding: 2px 7px;
+        margin: 2px 0 4px;
+      }
+
+      .building-card .mix-hint {
+        font-size: 10px;
+        color: #4a6080;
+        line-height: 1.5;
+        margin-top: 4px;
+      }
+
+      .building-card .reset-offset,
+      .duplicate-btn {
+        font-size: 11px;
+        padding: 2px 8px;
+      }
+
+      /* 검토 결과 (우측 패널) */
+      .detail-checks {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 0.5px solid #131e35;
+      }
+
+      .detail-sec-title {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #4a6080;
+        margin-bottom: 8px;
+      }
+
+      .chk-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+        font-size: 12px;
+      }
+
+      .chk-row .status-dot {
+        flex: none;
+      }
+
+      .chk-label {
+        flex: 1;
+        color: #94a3b8;
+      }
+
+      .chk-text.pass {
+        color: #22c55e;
+      }
+
+      .chk-text.fail {
+        color: #ef4444;
+      }
+
+      .chk-text.na {
+        color: #4a6080;
+      }
+
+      /* ---------------- 3D 캔버스 ---------------- */
+      #viewport {
+        flex: 1;
+        position: relative;
+        min-width: 0;
+        background: #070d1a;
+      }
+
+      #viewport canvas {
+        display: block;
+      }
+
+      /* 분석 진행바 — 상단 얇은 앰버 바 (setStatus의 % 메시지로 갱신) */
+      #progress-bar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 2px;
+        width: 0;
+        background: #e0921a;
+        z-index: 8;
+        opacity: 0;
+        transition: width 0.2s, opacity 0.2s;
+        pointer-events: none;
+      }
+
+      #progress-bar.active {
+        opacity: 1;
+      }
+
+      /* 시간 슬라이더 오버레이 */
+      #time-overlay {
+        position: absolute;
+        left: 50%;
+        bottom: 14px;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: rgba(13, 21, 37, 0.88);
+        border: 0.5px solid #1e2d4a;
+        border-radius: 8px;
+        padding: 7px 14px;
+        z-index: 5;
+        backdrop-filter: blur(4px);
+      }
+
+      #time-overlay #time-label {
+        font-weight: 700;
+        color: #e0921a;
+      }
+
+      #time-overlay #sun-label {
+        font-size: 11px;
+        color: #94a3b8;
+        min-width: 150px;
+      }
+
+      #time-overlay input[type="range"] {
+        width: 220px;
+      }
+
+      /* 좌하단 좌표 표시 */
+      #cursor-coords {
+        position: absolute;
+        left: 10px;
+        bottom: 10px;
+        font-size: 10px;
+        color: #4a6080;
+        z-index: 5;
+        pointer-events: none;
+        min-height: 14px;
+      }
+
+      /* 우하단 나침반 */
+      #compass {
+        position: absolute;
+        right: 10px;
+        bottom: 10px;
+        z-index: 5;
+        pointer-events: none;
+        opacity: 0.9;
+      }
+
+      /* ---------------- 분석 결과 요약 카드 ---------------- */
+      .summary-card {
+        border: 1px solid #131e35;
+        border-radius: 6px;
+        padding: 6px 9px;
+        margin-top: 8px;
+        background: #111827;
+        font-size: 11px;
+      }
+
+      .summary-card .bname {
+        font-weight: 600;
+        margin-bottom: 3px;
+        color: #cbd5e1;
+      }
+
+      .surf-line {
+        color: #94a3b8;
+        line-height: 1.6;
+      }
+
+      .surf-line b.ok,
+      b.ok {
+        color: #22c55e;
+      }
+
+      .surf-line b.bad,
+      b.bad {
+        color: #ef4444;
+      }
+
+      #site-area {
+        width: 72px;
+      }
+
+      #epw-select {
+        width: 100%;
+      }
+
+      /* ---------------- 상태바 (28px) ---------------- */
+      #status-strip {
+        flex: none;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        gap: 0;
+        padding: 0 12px;
+        font-size: 11px;
+        color: #94a3b8;
+        background: #0f1929;
+        border-top: 0.5px solid #1e2d4a;
+        overflow: hidden;
+      }
+
+      #statusbar {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: #94a3b8;
+      }
+
+      #site-totals {
+        flex: none;
+        max-width: 320px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: #cbd5e1;
+        padding: 0 10px;
+        border-left: 0.5px solid #1e2d4a;
+      }
+
+      #site-totals:empty {
+        display: none;
+      }
+
+      #status-checks {
+        flex: none;
+        display: flex;
+        align-items: center;
+      }
+
+      .sb-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 0 10px;
+        border-left: 0.5px solid #1e2d4a;
+        white-space: nowrap;
+      }
+
+      .sb-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #253550;
+      }
+
+      .sb-item.ok {
+        color: #cbd5e1;
+      }
+
+      .sb-item.ok .sb-dot {
+        background: #22c55e;
+      }
+
+      .sb-item.bad {
+        color: #ef4444;
+      }
+
+      .sb-item.bad .sb-dot {
+        background: #ef4444;
+      }
+
+      .sb-item.na {
+        color: #4a6080;
+      }
+
+      /* ---------------- 모달 ---------------- */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(2, 6, 14, 0.66);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 20;
+        backdrop-filter: blur(2px);
+      }
+
+      .modal-overlay[hidden] {
+        display: none;
+      }
+
+      .modal-box {
+        background: #0d1525;
+        border: 1px solid #1e2d4a;
+        border-radius: 10px;
+        padding: 18px;
+        max-width: 440px;
+        max-height: 80vh;
+        overflow-y: auto;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      }
+
+      .modal-box h2 {
+        font-size: 14px;
+        font-weight: 700;
+        color: #cbd5e1;
+        margin-bottom: 10px;
+      }
+
+      .modal-box .row {
+        margin-top: 14px;
+        margin-bottom: 0;
+        justify-content: flex-end;
+      }
+
+      /* ---------------- 스크롤바 ---------------- */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: #1e2d4a;
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: #2a3f66;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="shell">
+      <!-- ================= 툴바 ================= -->
+      <header id="toolbar">
+        <span id="logo">arch_view</span>
+        <label class="btn" for="dxf-file">DXF 불러오기</label>
+        <input type="file" id="dxf-file" accept=".dxf" hidden />
+        <label class="btn" for="dxf-file-add">DXF 추가</label>
+        <input type="file" id="dxf-file-add" accept=".dxf" hidden />
+        <div class="tb-spacer"></div>
+        <div id="tb-sun">
+          <label class="tb-date-label" for="date-input">분석일</label>
+          <input type="date" id="date-input" value="2026-12-21" />
+          <svg id="sun-arc" viewBox="0 0 60 26" width="60" height="26" aria-hidden="true">
+            <line x1="4" y1="22" x2="56" y2="22" stroke="#131e35" stroke-width="1" />
+            <path d="M12,22 A18,18 0 0 1 48,22" fill="none" stroke="#1e2d4a" stroke-width="1.5" />
+            <circle id="sun-arc-dot" cx="30" cy="4" r="3" fill="#e0921a" />
+          </svg>
+        </div>
+        <div class="tb-spacer"></div>
+        <button id="show-layer-rules" class="btn">레이어 규약</button>
+        <button id="export-xlsx" class="btn primary">엑셀 내보내기</button>
+      </header>
+
+      <!-- ================= 본문 3열 ================= -->
+      <div id="main">
+        <!-- 좌측 패널: 라이브러리 + 장면 목록 + 분석 설정 -->
+        <aside id="left-panel">
+          <section class="lp-section">
+            <details open>
+              <summary>건물 라이브러리</summary>
+              <div id="library-list"></div>
+              <div class="row">
+                <button id="library-select-all" class="btn mini">전체 선택</button>
+                <button id="library-select-none" class="btn mini">해제</button>
+              </div>
+              <div class="row">
+                <button id="library-add-scene" class="btn primary block">장면에 추가</button>
+              </div>
+              <div class="row">
+                <label class="mini-label" for="unit-select">도면 단위</label>
+                <select id="unit-select">
+                  <option value="auto" selected>자동감지(기본 mm)</option>
+                  <option value="mm">mm 고정</option>
+                  <option value="m">m 고정</option>
+                </select>
+              </div>
+              <div class="row">
+                <button id="load-sample" class="btn mini block">샘플 배치도 불러오기</button>
+              </div>
+            </details>
+          </section>
+
+          <section class="lp-section grow">
+            <div class="lp-heading">장면 목록</div>
+            <div id="building-list">
+              <p class="hint">DXF를 불러오거나 라이브러리에서 건물을 추가하세요.</p>
+            </div>
+          </section>
+
+          <section class="lp-section">
+            <details>
+              <summary>대지 위치·격자</summary>
+              <div class="row">
+                <label for="lat-input">위도</label>
+                <input type="number" id="lat-input" value="37.57" step="0.01" min="-90" max="90" />
+                <label for="lng-input">경도</label>
+                <input type="number" id="lng-input" value="126.98" step="0.01" min="-180" max="180" />
+              </div>
+              <div class="row">
+                <label for="grid-input">격자(m)</label>
+                <input type="number" id="grid-input" value="1" step="0.5" min="0.5" max="5" />
+              </div>
+              <p class="hint">
+                위도·경도·분석일(툴바)·격자는 그림자 미리보기, 일조권 검토, PV 분석이
+                공용으로 씁니다.
+              </p>
+            </details>
+
+            <details>
+              <summary>정북·채광·인동 기준</summary>
+              <div class="row">
+                <button id="preset-toggle" class="btn mini block">서울시 조례 기준 적용</button>
+              </div>
+              <div class="row">
+                <label for="north-low-m">정북 10m이하 이격(m)</label>
+                <input type="number" id="north-low-m" value="1.5" step="0.1" min="0" max="10" />
+              </div>
+              <div class="row">
+                <label for="north-ratio">정북 초과부 ×H</label>
+                <input type="number" id="north-ratio" value="0.5" step="0.05" min="0.1" max="2" />
+              </div>
+              <div class="row">
+                <label for="daylight-ratio">채광 H/D ≤</label>
+                <input type="number" id="daylight-ratio" value="2" step="0.1" min="0.1" max="10" />
+                <label for="daylight-roadpark">도로·공원</label>
+                <input type="number" id="daylight-roadpark" value="2" step="0.1" min="0.1" max="10" />
+              </div>
+              <div class="row">
+                <label for="spacing-window">인동 채광벽 ×H</label>
+                <input type="number" id="spacing-window" value="0.5" step="0.05" min="0.1" max="2" />
+              </div>
+              <div class="row">
+                <label for="spacing-nowindow-m">창없음↔측벽(m)</label>
+                <input type="number" id="spacing-nowindow-m" value="8" step="0.5" min="0" max="30" />
+              </div>
+              <div class="row">
+                <label for="spacing-side-m">측벽↔측벽(m)</label>
+                <input type="number" id="spacing-side-m" value="4" step="0.5" min="0" max="30" />
+              </div>
+              <div class="row">
+                <button id="toggle-daylight" class="btn mini">채광사선 검토</button>
+                <button id="toggle-spacing" class="btn mini">인동거리 검토</button>
+              </div>
+              <p class="hint">
+                기본값 = 건축법 시행령 제86조. 정북사선은 항상 자동 검토,
+                채광·인동은 토글을 켜면 이동·회전 중 실시간 갱신.
+                <code>PLAN_WIN</code> 레이어로 창면 표시 시 완화 기준 적용.
+              </p>
+              <div id="setback-summary"></div>
+            </details>
+
+            <details>
+              <summary>일조권 검토 (수인한도)</summary>
+              <p class="hint">
+                대법원 판례 기준 — 인접건물이 기준일 09~15시 연속 2시간 또는 08~16시
+                총 4시간 이상 직달일사를 받는지 판정. 정북사선(거리 기준)과는 별개.
+              </p>
+              <div class="row">
+                <label for="sunhours-rule">판정 기준</label>
+                <select id="sunhours-rule">
+                  <option value="either" selected>연속2h 또는 총4h</option>
+                  <option value="continuous">연속 2h만 (9~15시)</option>
+                  <option value="total">총 4h만 (8~16시)</option>
+                </select>
+              </div>
+              <div class="row">
+                <label for="sunhours-step">시간 간격(분)</label>
+                <input type="number" id="sunhours-step" value="10" step="5" min="5" max="60" />
+              </div>
+              <div class="row">
+                <button id="run-sunhours" class="btn primary">일조권 검토 실행</button>
+                <button id="clear-sunhours" class="btn mini">지우기</button>
+              </div>
+              <p class="hint">히트맵: 파랑=적합, 빨강=위반</p>
+              <div id="sunhours-summary"></div>
+            </details>
+
+            <details>
+              <summary>PV 상대평가 (M4)</summary>
+              <p class="hint">
+                대표일 4일(춘분·하지·추분·동지) 8~16시 직달 누적 × 입사각 보정 —
+                인접건물 전체 벽면·지붕
+              </p>
+              <div class="row">
+                <button id="run-pv" class="btn primary">PV 분석 실행</button>
+                <button id="clear-pv" class="btn mini">지우기</button>
+              </div>
+              <div class="row">
+                <button id="export-pv-csv" class="btn mini">CSV 내보내기</button>
+              </div>
+              <p class="hint">히트맵: 파랑=낮음 → 노랑 → 빨강=높음 (최대값 대비 %)</p>
+              <div id="pv-summary"></div>
+            </details>
+
+            <details>
+              <summary>PV 절대평가 (M5 · TMY)</summary>
+              <p class="hint">
+                EPW 8,760시간: 직달(DNI×cosθ, 차폐 레이캐스팅) + 산란(DHI) →
+                연간 kWh/㎡
+              </p>
+              <div class="row">
+                <label for="epw-select">기상데이터</label>
+              </div>
+              <div class="row">
+                <select id="epw-select"></select>
+              </div>
+              <div class="row">
+                <button id="run-pv-abs" class="btn primary">M5 절대평가 실행</button>
+                <button id="clear-pv-abs" class="btn mini">지우기</button>
+              </div>
+              <p class="hint">히트맵: 파랑=0 → 노랑 → 빨강=최대 kWh/㎡</p>
+              <div id="pv-abs-summary"></div>
+            </details>
+
+            <details id="wind-section">
+              <summary>바람길 분석 (M8)</summary>
+              <p class="hint">
+                EPW 풍향·풍속 통계의 주풍향으로 2D 포텐셜 흐름을 근사해 스트림라인과
+                바람그림자(정체 영역)를 표시 — CFD가 아닌 개략 검토용.
+              </p>
+              <div class="row">
+                <label for="wind-epw">기상데이터</label>
+              </div>
+              <div class="row">
+                <select id="wind-epw"></select>
+              </div>
+              <div class="row">
+                <label for="wind-month">기간</label>
+                <select id="wind-month">
+                  <option value="" selected>연간</option>
+                  <option value="1">1월</option>
+                  <option value="2">2월</option>
+                  <option value="3">3월</option>
+                  <option value="4">4월</option>
+                  <option value="5">5월</option>
+                  <option value="6">6월</option>
+                  <option value="7">7월</option>
+                  <option value="8">8월</option>
+                  <option value="9">9월</option>
+                  <option value="10">10월</option>
+                  <option value="11">11월</option>
+                  <option value="12">12월</option>
+                </select>
+              </div>
+              <div class="row">
+                <button id="run-wind" class="btn primary">바람길 분석</button>
+                <button id="clear-wind" class="btn mini">지우기</button>
+              </div>
+              <p class="hint">
+                스트림라인: 파랑=정체(&lt;0.3배) → 청록 → 초록(≈1배) → 주황 →
+                빨강(&gt;2배) — 주풍속 대비 배율
+              </p>
+              <div id="wind-summary"></div>
+            </details>
+
+            <details id="sunhoursmap-section">
+              <summary>일조시간 지도 (M9)</summary>
+              <p class="hint">
+                지면·계획주동 표면의 기준일 08~16시 직달일조 시간 히트맵(30분 간격,
+                격자 2m). 일조권 검토(수인한도 판정)와는 별개의 시각화 도구.
+              </p>
+              <div class="row">
+                <label for="sunhoursmap-date">기준일</label>
+                <select id="sunhoursmap-date">
+                  <option value="동지" selected>동지 (12/21)</option>
+                  <option value="하지">하지 (6/21)</option>
+                  <option value="춘분">춘분 (3/21)</option>
+                  <option value="연평균">연평균 (4개 대표일)</option>
+                </select>
+              </div>
+              <div class="row">
+                <label>
+                  <input type="checkbox" id="sunhoursmap-legal" />
+                  법적기준 오버레이 (연속2h/총4h — 동지 기준)
+                </label>
+              </div>
+              <div class="row">
+                <button id="run-sunhoursmap" class="btn primary">일조시간 분석</button>
+                <button id="clear-sunhoursmap" class="btn mini">지우기</button>
+              </div>
+              <p class="hint">0h=암청 → 1h=남색 → 2h=파랑 → 4h=청록 → 6h=초록 → 8h=노랑</p>
+              <div id="sunhoursmap-summary"></div>
+            </details>
+
+            <details>
+              <summary>세대수·사업성</summary>
+              <div class="row">
+                <label for="site-area">대지면적(㎡)</label>
+                <input type="number" id="site-area" value="0" min="0" step="100" />
+              </div>
+              <div id="bcr-far" class="hint"></div>
+              <p class="hint">
+                계획주동·세대수 합계는 하단 상태바에 표시됩니다. 엑셀 내보내기는
+                툴바 우측 버튼 — 시트 4개(배치 개요 · 일조권 · 정북사선 · PV).
+              </p>
+            </details>
+
+            <p class="hint help-hint">
+              마우스: 좌드래그 회전 · 휠 줌 · 우드래그 팬<br />
+              계획주동(노랑): 클릭 후 드래그 이동, 선택 시 주황 핸들로 회전
+            </p>
+          </section>
+        </aside>
+
+        <!-- 3D 캔버스 -->
+        <main id="viewport">
+          <div id="progress-bar"></div>
+          <div id="time-overlay">
+            <span id="time-label">12:30</span>
+            <input type="range" id="time-slider" min="480" max="960" step="10" value="750" />
+            <span id="sun-label"></span>
+          </div>
+          <div id="cursor-coords"></div>
+          <div id="compass">
+            <svg viewBox="0 0 36 36" width="36" height="36" aria-hidden="true">
+              <circle cx="18" cy="18" r="16" fill="rgba(13, 21, 37, 0.78)" stroke="#1e2d4a" stroke-width="1" />
+              <path d="M18 6.5 L21.4 21 L18 18.2 L14.6 21 Z" fill="#e0921a" />
+              <text x="18" y="30" text-anchor="middle" font-size="8" font-weight="700" fill="#94a3b8">N</text>
+            </svg>
+          </div>
+        </main>
+
+        <!-- 우측 패널: 선택 건물 상세 -->
+        <aside id="right-panel">
+          <div id="building-detail">
+            <div class="detail-empty">
+              건물을 선택하세요
+              <span>장면 목록 또는 3D 화면에서 건물을 클릭하면<br />상세 정보가 여기 표시됩니다</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <!-- ================= 상태바 ================= -->
+      <footer id="status-strip">
+        <div id="statusbar">DXF 파일을 불러오세요.</div>
+        <div id="site-totals"></div>
+        <div id="status-checks"></div>
+      </footer>
+    </div>
+
+    <!-- ================= 레이어 규약 모달 ================= -->
+    <div id="layer-rules-modal" class="modal-overlay" hidden>
+      <div class="modal-box">
+        <h2>DXF 레이어 규약</h2>
+        <p class="hint">
+          주동 레이어(권장): <code>PLAN_&lt;타입&gt;_&lt;번호&gt;</code> — 예:
+          <code>PLAN_A_1</code>, <code>PLAN_B_2</code> (타입 문자는 타워형·판상형 등
+          임의 구분, 층수는 기본 15층 — 목록에서 조정). 인접건물:
+          <code>ADJ_BLDG_&lt;n&gt;F</code> 또는 <code>ADJ_&lt;타입&gt;_&lt;번호&gt;</code>.
+          구버전 <code>PLAN_BLDG_&lt;n&gt;F</code>도 계속 인식됩니다.
+          경계선: <code>SITE_BOUNDARY</code>(대지) / <code>ADJ_BOUNDARY</code>(인접대지 —
+          정북·채광사선 기준선) / <code>ROAD_CL</code>(도로중심선) /
+          <code>PARK_BOUNDARY</code>(공원). 창면:
+          <code>PLAN_WIN</code>(footprint 에지와 같은 좌표에 그리기).
+          단위는 <code>$INSUNITS</code> 자동 인식(없으면 mm 가정). 여러 파일로 나눠
+          그렸으면 먼저 하나를 불러온 뒤 "DXF 추가"로 병합.
+        </p>
+        <div class="row">
+          <a href="/DXF_RULES.html" target="_blank" rel="noopener"
+            ><button class="btn">전체 규약 문서 열기 (새 탭)</button></a
+          >
+          <button id="close-layer-rules" class="btn primary">닫기</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+    <script type="module">
+      // 툴바 태양호 — 시간 슬라이더 위치를 소형 arc 위 태양 점으로 표시 (표시 전용)
+      const slider = document.getElementById("time-slider");
+      const dot = document.getElementById("sun-arc-dot");
+      if (slider && dot) {
+        const update = () => {
+          const min = Number(slider.min);
+          const max = Number(slider.max);
+          const t = (Number(slider.value) - min) / (max - min);
+          const a = Math.PI * (1 - t);
+          dot.setAttribute("cx", (30 + 18 * Math.cos(a)).toFixed(1));
+          dot.setAttribute("cy", (22 - 18 * Math.sin(a)).toFixed(1));
+        };
+        slider.addEventListener("input", update);
+        update();
+      }
+    </script>
+  </body>
+</html>

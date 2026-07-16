@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>arch_view — DXF 레이어 규약</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1c1e21; --muted: #5f6368; --card: #f4f6f8;
+    --border: #d8dce1; --accent: #1a73e8; --code-bg: #eef1f4;
+    --plan: #b8860b; --warn-bg: #fff4e0; --warn-border: #e0b53c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17191d; --fg: #e4e6eb; --muted: #9aa0a6; --card: #1f2228;
+      --border: #33363d; --accent: #8ab4f8; --code-bg: #2a2e35;
+      --plan: #e0b53c; --warn-bg: #2a2416; --warn-border: #8a7028;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 20px 80px;
+    font-family: "Apple SD Gothic Neo", "Pretendard", system-ui, sans-serif;
+    font-size: 15px; line-height: 1.75; color: var(--fg); background: var(--bg);
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); margin-bottom: 28px; }
+  h2 {
+    font-size: 19px; margin: 40px 0 12px; padding-bottom: 6px;
+    border-bottom: 2px solid var(--border);
+  }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  code {
+    background: var(--code-bg); border-radius: 4px; padding: 1px 6px;
+    font-size: 13px; font-family: "SF Mono", Consolas, monospace;
+  }
+  ul { padding-left: 22px; }
+  li { margin: 5px 0; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--card); white-space: nowrap; }
+  td:first-child { white-space: nowrap; }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 700; border-radius: 4px;
+    padding: 1px 7px; margin-left: 6px; vertical-align: middle;
+    background: var(--accent); color: var(--bg);
+  }
+  .callout {
+    background: var(--warn-bg); border: 1px solid var(--warn-border);
+    border-radius: 8px; padding: 12px 16px; margin: 16px 0;
+  }
+  .callout b:first-child { color: var(--plan); }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 18px; margin: 14px 0;
+  }
+  .muted { color: var(--muted); font-size: 13px; }
+  .law { font-size: 13px; color: var(--muted); }
+  .formula {
+    font-family: "SF Mono", Consolas, monospace; font-size: 14px;
+    background: var(--code-bg); border-radius: 6px; padding: 8px 14px;
+    display: inline-block; margin: 4px 0;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>DXF 레이어 규약</h1>
+  <p class="subtitle">arch_view 일조·태양광 시뮬레이터 — 배치도 작성 가이드</p>
+
+  <p>AutoCAD 등에서 배치도를 작성할 때 아래 레이어 이름·기하 규칙을 지키면
+  arch_view가 대지·인접대지·주동·인접건물·창면을 자동으로 구분해 불러옵니다.</p>
+
+  <h2>1. 좌표계·단위 규칙 <span class="badge">가장 중요</span></h2>
+  <ul>
+    <li><b>단위: mm(밀리미터) 기본</b> — 한국 실무 mm 도면을 그대로 사용하세요.
+      m 단위로 재저장할 필요가 없습니다.</li>
+    <li><b>단위 자동 인식</b> — DXF HEADER의 <code>$INSUNITS</code>가 4(mm)면 ÷1000,
+      6(m)이면 그대로. 없으면 mm로 가정. 불러오기 화면에서 mm/m 수동 고정도 가능.</li>
+    <li><b>정북 = 도면 +Y축</b> — 북쪽이 Y+가 아니면 프로그램의 "정북 보정각(northAngle)"으로
+      보정합니다 (도면 자체를 회전시키지 마세요).</li>
+    <li>모든 레이어는 <b>하나의 월드 좌표계(WCS)</b>를 공유해야 합니다 — 같은 원점·같은 축척.</li>
+    <li>파일을 나눠 그려도 됩니다. 단, <b>모두 같은 원점(0,0) 기준</b>이어야
+      "추가 DXF 불러오기(병합)" 시 정확히 겹칩니다.</li>
+  </ul>
+
+  <h2>2. 레이어 목록</h2>
+  <div class="table-wrap">
+  <table>
+    <tr><th>레이어명</th><th>용도</th><th>도형</th><th>비고</th></tr>
+    <tr>
+      <td><code>PLAN_&lt;타입&gt;_&lt;번호&gt;</code> <span class="badge">권장</span></td>
+      <td>계획 주동</td><td>LWPOLYLINE (닫힘)</td>
+      <td>예: <code>PLAN_A_1</code>, <code>PLAN_B_2</code>. 타입 문자(A/B/…)는 타워형·판상형
+        등을 사용자가 임의로 구분. 층수는 <b>기본 15층</b>(프로그램에서 조정),
+        필요 시 <code>PLAN_A_1_20F</code>처럼 층수 접미사 가능.
+        건물명은 <b>계획주동_A_1</b>로 표시. 색상 7(흰색) 권장</td>
+    </tr>
+    <tr>
+      <td><code>ADJ_&lt;타입&gt;_&lt;번호&gt;</code></td>
+      <td>인접 건물</td><td>LWPOLYLINE (닫힘)</td>
+      <td>예: <code>ADJ_C_1</code> → 인접건물_C_1. 기본 5층</td>
+    </tr>
+    <tr>
+      <td><code>PLAN_BLDG(_&lt;n&gt;F)</code></td>
+      <td>계획 주동 <span class="muted">(구버전 호환)</span></td><td>LWPOLYLINE (닫힘)</td>
+      <td><code>PLAN_BLDG_15F</code> = 15층. 접미사 없으면 기본 15층</td>
+    </tr>
+    <tr>
+      <td><code>ADJ_BLDG(_&lt;n&gt;F)</code></td>
+      <td>인접 건물 <span class="muted">(구버전 호환)</span></td><td>LWPOLYLINE (닫힘)</td>
+      <td>접미사 없으면 기본 5층. 색상 6(자홍) 권장</td>
+    </tr>
+    <tr>
+      <td><code>SITE_BOUNDARY</code></td>
+      <td>대지 경계선</td><td>LWPOLYLINE (닫힘)</td>
+      <td>반드시 닫힌 폴리라인. 색상 1(빨강) 권장. <code>ADJ_BOUNDARY</code>가 없을 때
+        정북사선 기준선 대체용</td>
+    </tr>
+    <tr>
+      <td><code>ADJ_BOUNDARY</code></td>
+      <td>인접대지 경계선</td><td>LWPOLYLINE</td>
+      <td>열린 선 허용. 색상 2(노랑) 권장. <b>정북사선</b>(정북 방향)·<b>채광사선</b>
+        (창면 직각 방향) 기준선</td>
+    </tr>
+    <tr>
+      <td><code>ROAD_CL</code></td>
+      <td>도로 중심선</td><td>LWPOLYLINE / LINE</td>
+      <td>색상 4(하늘색) 권장. 채광사선에서 도로 중심선을 인접대지경계선으로 간주
+        (제86조③3호) — 같은 배율 적용</td>
+    </tr>
+    <tr>
+      <td><code>PARK_BOUNDARY</code></td>
+      <td>공원 등 경계</td><td>LWPOLYLINE</td>
+      <td>색상 3(초록) 권장. 채광사선 기준선(도로와 동일 취급)</td>
+    </tr>
+    <tr>
+      <td><code>PLAN_WIN</code></td>
+      <td>계획주동 창 있는 벽면</td><td>LINE / LWPOLYLINE</td>
+      <td>해당 벽면의 footprint 에지와 <b>정확히 같은 좌표</b>로 그림. 색상 6(자홍) 권장</td>
+    </tr>
+    <tr>
+      <td><code>ADJ_WIN</code></td>
+      <td>인접건물 창 있는 벽면</td><td>LINE / LWPOLYLINE</td>
+      <td>3D 하이라이트 표시 용도</td>
+    </tr>
+    <tr>
+      <td><code>CONTOUR</code></td>
+      <td>등고선 (M7 지형용)</td><td>LWPOLYLINE</td>
+      <td>표고는 정점 Z값 또는 <code>ELEV</code> 속성</td>
+    </tr>
+  </table>
+  </div>
+  <ul>
+    <li>같은 레이어에 폴리라인이 여러 개면 각각 별도 건물로 인식되며
+      <code>계획주동_A_1</code>, <code>계획주동_A_1-2</code>처럼 구분됩니다.
+      다만 <b>주동 1동 = 레이어 1개</b>를 권장합니다(이름 식별 명확).</li>
+    <li>경계선·도로·공원·등고선 레이어는 건물로 압출되지 않고 <b>참고용 2D 선</b>으로만
+      표시됩니다(클릭·이동 불가).</li>
+  </ul>
+
+  <h2>3. 각 건물 외곽선 규칙</h2>
+  <ul>
+    <li>건물 1동 = <b>닫힌 폴리라인 1개</b> (LWPOLYLINE, closed flag 또는 첫점=끝점).</li>
+    <li>꼭짓점 3개 이상, 자기 교차(꼬임) 없는 단순 다각형.</li>
+    <li>시계/반시계 방향 무관 — 프로그램이 부호 면적으로 자동 판별.</li>
+  </ul>
+
+  <h2>4. 법적 검토와 레이어의 관계</h2>
+
+  <div class="card">
+    <h3>정북사선 <span class="law">건축법 시행령 제86조 제1항 (전용·일반주거지역)</span></h3>
+    <p>계획주동의 <b>각 부분</b>에서 정북 방향으로 <code>ADJ_BOUNDARY</code>까지의
+    수평거리 중 <b>최솟값 D</b>로 판정 (없으면 <code>SITE_BOUNDARY</code> 대체).
+    창면과 무관하며 별도 실행 버튼 없이 항상 자동 재계산 — 검토선(초록=적합,
+    빨강=위반)이 3D에 항상 표시됩니다.</p>
+    <div class="formula">높이 10m 이하 부분: 이격 ≥ 1.5m<br/>높이 10m 초과 부분: 이격 ≥ 높이 × 0.5</div>
+    <p class="muted">거리 D에서의 허용높이: D &lt; 1.5m → 건축 불가 / D ≥ 1.5m → max(10m, 2×D)</p>
+  </div>
+
+  <div class="card">
+    <h3>채광사선 <span class="law">제86조 제3항 제1호</span></h3>
+    <p>검토 대상은 <b><code>PLAN_WIN</code>으로 표시된 계획주동 창면뿐</b>.
+    창면에서 <b>직각(법선) 방향</b>으로 가장 가까운 기준선(<code>ADJ_BOUNDARY</code> /
+    <code>ROAD_CL</code> / <code>PARK_BOUNDARY</code>)까지 수평거리 D에 대해:</p>
+    <div class="formula">높이 H ≤ 2 × D <span class="muted">(근린상업·준주거지역은 4배로 설정 변경)</span></div>
+    <p class="muted">도로·공원 중심선은 제3호에 따라 인접대지경계선으로 간주 — 같은 배율.
+    PLAN_WIN이 없는 주동은 검토 제외(방위 추정 안 함).</p>
+  </div>
+
+  <div class="card">
+    <h3>인동거리 <span class="law">제86조 제3항 제2호</span></h3>
+    <p>두 계획주동의 벽면을 <b>직각방향으로 확장했을 때 실제로 마주보는 쌍만</b> 검토
+    (대각선으로 어긋난 배치는 검토 대상 아님).</p>
+    <ul>
+      <li><b>가목</b> — 채광창 있는 벽면이 마주봄: 이격 ≥ <b>0.5 × 높은 동 높이</b>
+        (시행령 하한 — <b>서울시 조례 0.8배</b>, 프로그램 프리셋 버튼으로 전환)</li>
+      <li><b>라목</b> — 채광창 없는 벽면 ↔ 측벽: <b>8m 이상</b></li>
+      <li><b>마목</b> — 측벽 ↔ 측벽: <b>4m 이상</b>
+        <span class="muted">(측벽 = 그 건물 최장 벽의 절반 이하 길이인 벽으로 근사 판별)</span></li>
+    </ul>
+    <p class="muted">PLAN_WIN이 전혀 없는 동은 모든 벽을 "창 있음"으로 간주(보수적).
+    나목(남측 저층 특례)·다목(부대복리시설)은 미반영 — 필요 시 값 직접 조정.</p>
+  </div>
+
+  <div class="card">
+    <h3>일조권(수인한도) <span class="law">대법원 판례 기준 — 법령 아님</span></h3>
+    <p>동지일 기준 인접건물(<code>ADJ_*</code>) 벽면·지붕을 격자로 나눠 시간대별
+    태양 레이캐스팅으로 <b>연속 2시간(9~15시) 또는 총 4시간(8~16시)</b> 일조 확보
+    여부를 판정합니다. 버튼 실행 방식이며 파랑=적합, 빨강=미달.</p>
+  </div>
+
+  <h2>5. 창면 그리는 법 (PLAN_WIN)</h2>
+  <div class="callout">
+    <b>핵심:</b> 창을 표시할 벽면의 footprint 에지(변)와 <b>정확히 같은 시작점·끝점
+    좌표</b>로 <code>PLAN_WIN</code> 레이어에 LINE(또는 LWPOLYLINE)을 그립니다.
+    허용오차 0.1m(변환 후 기준) — 스냅으로 정확히 따라 그리면 됩니다.
+    한 벽면 전체에 창이 있다는 뜻이며 벽면 일부만 창은 지원하지 않습니다(벽 단위 판정).
+  </div>
+  <p>3D 뷰에서 창이 표시된 벽면은 <b>연한 파랑 반투명 하이라이트</b>로 구분됩니다.
+  좌우/상하 반전 시 창면도 함께 반전됩니다.</p>
+
+  <h2>6. 파일 구성 예시</h2>
+  <p><b>방법 A — 파일 1개</b>: 위 레이어를 모두 같은 DXF에 넣고 한 번에 불러오기.</p>
+  <p><b>방법 B — 파일 분리</b>:</p>
+  <ul>
+    <li><code>site.dxf</code>: SITE_BOUNDARY, ADJ_BOUNDARY, ROAD_CL, PARK_BOUNDARY</li>
+    <li><code>plan.dxf</code>: PLAN_A_1, PLAN_A_2, PLAN_B_1, PLAN_WIN …</li>
+    <li><code>adjacent.dxf</code>: ADJ_BLDG_5F(또는 ADJ_C_1 등), ADJ_WIN …</li>
+  </ul>
+  <p>먼저 <code>site.dxf</code>를 "DXF 불러오기"로 불러온 뒤 나머지를
+  "추가 DXF 불러오기"로 병합합니다. <b>모든 파일이 같은 원점(0,0) 기준</b>이어야
+  서로 어긋나지 않습니다.</p>
+
+  <h2>7. 예제 파일</h2>
+  <p><code>data/sample_site.dxf</code>(생성 스크립트:
+  <code>scripts/generate_sample_dxf.js</code>)에 위 레이어를 모두 사용한 예제가
+  있습니다 — mm 단위(<code>$INSUNITS=4</code>),
+  <code>PLAN_A_1</code>/<code>PLAN_A_2</code>/<code>PLAN_B_1_10F</code> 권장 규약 사용.
+  AutoCAD에서 열어 좌표·레이어 구성을 참고하세요.</p>
+
+  <p class="muted" style="margin-top:48px">
+    이 문서는 <code>data/DXF_RULES.md</code>의 HTML 버전입니다. 법적 판정 결과는
+    검토용 참고자료이며, 배율·기준값은 지자체 조례에 따라 프로그램 설정에서 조정하세요.
+  </p>
+</main>
+</body>
+</html>
