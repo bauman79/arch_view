@@ -5,6 +5,13 @@ export interface Point2 {
   y: number;
 }
 
+/** M7 지형 — 등고선 꼭짓점 등 3D 점 (m, DXF 평면 x/y + 고도 z) */
+export interface Point3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface Site {
   latitude: number;
   longitude: number;

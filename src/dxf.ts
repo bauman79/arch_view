@@ -2,20 +2,28 @@ import DxfParser from "dxf-parser";
 import { FixedLwpolylineParser } from "./dxf-lwpolyline";
 import { signedArea } from "./geom2d";
 import { defaultUnitMix } from "./massing";
+import { extractContourPoints, isContourLayer } from "./terrain";
 import { segmentLiesOnEdge, WINDOW_MATCH_TOLERANCE } from "./windows";
-import type { Building, BuildingType, OverlayLayer, OverlayLine, Point2 } from "./types";
+import type {
+  Building,
+  BuildingType,
+  OverlayLayer,
+  OverlayLine,
+  Point2,
+  Point3,
+} from "./types";
 
 // data/DXF_RULES.md DXF 레이어 규약
 export const LAYER_PLAN_PREFIX = "PLAN_BLDG";
 export const LAYER_ADJ_PREFIX = "ADJ_BLDG";
 export const LAYER_PLAN_WIN = "PLAN_WIN";
 export const LAYER_ADJ_WIN = "ADJ_WIN";
+// CONTOUR(_<고도>)는 M7 지형 파싱(terrain.ts)에서 3D 점과 함께 별도 처리한다
 const OVERLAY_LAYERS: OverlayLayer[] = [
   "SITE_BOUNDARY",
   "ADJ_BOUNDARY",
   "ROAD_CL",
   "PARK_BOUNDARY",
-  "CONTOUR",
 ];
 
 /** 레이어명 접미사로 층수 지정: PLAN_BLDG_15F, ADJ_BLDG_5F 등 (대소문자 무관) */
@@ -38,6 +46,8 @@ export type UnitSource = "header-mm" | "header-m" | "default-mm" | "manual-mm" |
 export interface DxfLoadResult {
   buildings: Building[];
   overlays: OverlayLine[];
+  /** M7 지형 — CONTOUR 레이어 등고선 꼭짓점(m, 고도 z 포함). 없으면 빈 배열(평지 모드) */
+  contourPoints: Point3[];
   warnings: string[];
   /** 실제 적용된 mm→m(또는 m→m) 변환 배율 */
   unitScale: number;
@@ -175,6 +185,7 @@ export function parseDxfBuildings(
 
   const polylines: RawPolyline[] = [];
   const overlays: OverlayLine[] = [];
+  const contourPoints: Point3[] = [];
   const planWinSegments: [Point2, Point2][] = [];
   const adjWinSegments: [Point2, Point2][] = [];
 
@@ -228,6 +239,33 @@ export function parseDxfBuildings(
       continue;
     }
 
+    // M7 지형 — CONTOUR(_<고도>) 레이어: TIN용 3D 점 수집 + 참고선 오버레이 표시 겸용
+    if (isContourLayer(upper)) {
+      const pts3 = extractContourPoints(entity, upper, unitScale);
+      if (!pts3 || pts3.length < 2) {
+        warnings.push(`${layer} 레이어에 꼭짓점 2개 미만 선분 무시`);
+        continue;
+      }
+      let closed = entity.shape === true || (entity.flag & 1) === 1;
+      const first = pts3[0];
+      const last = pts3[pts3.length - 1];
+      if (
+        pts3.length >= 3 &&
+        Math.abs(first.x - last.x) < 1e-9 &&
+        Math.abs(first.y - last.y) < 1e-9
+      ) {
+        pts3.pop();
+        closed = true;
+      }
+      contourPoints.push(...pts3);
+      overlays.push({
+        layer: "CONTOUR",
+        points: pts3.map((p) => ({ x: p.x, y: p.y })),
+        closed,
+      });
+      continue;
+    }
+
     const overlayLayer = OVERLAY_LAYERS.find((l) => l === upper);
     if (overlayLayer) {
       if (vertices.length < 2) {
@@ -278,6 +316,7 @@ export function parseDxfBuildings(
   if (
     polylines.length === 0 &&
     overlays.length === 0 &&
+    contourPoints.length === 0 &&
     planWinSegments.length === 0 &&
     adjWinSegments.length === 0
   ) {
@@ -413,7 +452,7 @@ export function parseDxfBuildings(
     );
   }
 
-  return { buildings, overlays, warnings, unitScale, unitSource };
+  return { buildings, overlays, contourPoints, warnings, unitScale, unitSource };
 }
 
 /**
@@ -440,11 +479,12 @@ export function computeRecenterOffset(
   return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
 }
 
-/** 지정한 offset만큼 건물(footprint+windowSegments)·오버레이 좌표를 평행이동 (원점 보정 적용) */
+/** 지정한 offset만큼 건물(footprint+windowSegments)·오버레이·등고선 좌표를 평행이동 (원점 보정 적용) */
 export function applyRecenterOffset(
   offset: Point2,
   buildings: Building[],
   overlays: OverlayLine[],
+  contourPoints?: Point3[],
 ): void {
   const shift = (p: Point2): Point2 => ({ x: p.x - offset.x, y: p.y - offset.y });
   for (const b of buildings) {
@@ -453,5 +493,11 @@ export function applyRecenterOffset(
   }
   for (const o of overlays) {
     o.points = o.points.map(shift);
+  }
+  if (contourPoints) {
+    for (const p of contourPoints) {
+      p.x -= offset.x;
+      p.y -= offset.y;
+    }
   }
 }
