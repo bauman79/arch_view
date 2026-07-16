@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { parseDxfBuildings } from "./dxf";
-import { contourSuffixElevation, isContourLayer } from "./terrain";
+import {
+  buildTerrainModel,
+  clipTriangles,
+  contourSuffixElevation,
+  isContourLayer,
+  nearestPointElevation,
+  sampleElevation,
+  terrainElevationForFootprint,
+} from "./terrain";
+import type { Point3 } from "./types";
 
 /**
  * terrain.ts M7 지형 검증 (PLAN.md "단계별 검증 방법" M7 항목).
  * 1부: CONTOUR 파싱 — Z좌표 우선, LWPOLYLINE elevation(38), 레이어 접미사 폴백, 단위 변환.
+ * 2부: TIN — 등고선 위 보간고도 = 등고선 표고, 단일 경사면 경사각, 대지경계 클리핑.
  */
 
 function dxfText(opts: { header?: string; entities: string }): string {
@@ -161,5 +171,136 @@ describe("CONTOUR 파싱 — parseDxfBuildings 통합", () => {
     });
     const r = parseDxfBuildings(text, "mm");
     expect(r.contourPoints).toEqual([]);
+  });
+});
+
+// ---------- 2부: TIN 생성 · 고도 샘플링 ----------
+
+/** 등고선 평행·등간격 단일 경사면 — y=0→z0m, y=20→z10m, … (경사 dz/dy = 0.5) */
+function slopeContours(): Point3[] {
+  const pts: Point3[] = [];
+  for (let row = 0; row <= 5; row++) {
+    const y = row * 20;
+    const z = row * 10;
+    for (let x = 0; x <= 100; x += 20) pts.push({ x, y, z });
+  }
+  return pts;
+}
+
+describe("buildTerrainModel", () => {
+  it("점 3개 미만 또는 전부 일직선이면 null (평지 모드 유지)", () => {
+    expect(buildTerrainModel([])).toBeNull();
+    expect(
+      buildTerrainModel([
+        { x: 0, y: 0, z: 0 },
+        { x: 10, y: 0, z: 5 },
+      ]),
+    ).toBeNull();
+    expect(
+      buildTerrainModel([
+        { x: 0, y: 0, z: 0 },
+        { x: 10, y: 0, z: 5 },
+        { x: 20, y: 0, z: 10 },
+      ]),
+    ).toBeNull(); // 일직선 — 삼각형 0개
+  });
+
+  it("중복 점(1cm 격자)은 제거하고 삼각분할", () => {
+    const m = buildTerrainModel([
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: 0.001, z: 99 }, // 사실상 같은 위치 — 제거
+      { x: 10, y: 0, z: 0 },
+      { x: 0, y: 10, z: 10 },
+    ]);
+    expect(m).not.toBeNull();
+    expect(m!.points).toHaveLength(3);
+  });
+
+  it("고도 범위(minZ·maxZ) 집계", () => {
+    const m = buildTerrainModel(slopeContours())!;
+    expect(m.minZ).toBe(0);
+    expect(m.maxZ).toBe(50);
+  });
+});
+
+describe("sampleElevation — 단일 경사면 검증", () => {
+  const model = buildTerrainModel(slopeContours())!;
+
+  it("등고선 위의 점은 등고선 표고 그대로", () => {
+    expect(sampleElevation(model, 50, 0)).toBeCloseTo(0);
+    expect(sampleElevation(model, 30, 20)).toBeCloseTo(10);
+    expect(sampleElevation(model, 70, 100)).toBeCloseTo(50);
+  });
+
+  it("등고선 사이는 선형 보간 — 경사 dz/dy = 0.5 일치", () => {
+    expect(sampleElevation(model, 50, 10)).toBeCloseTo(5);
+    expect(sampleElevation(model, 50, 30)).toBeCloseTo(15);
+    expect(sampleElevation(model, 13, 55)).toBeCloseTo(27.5);
+  });
+
+  it("TIN 외곽(hull) 밖은 null, 최근접 폴백은 근처 표고", () => {
+    expect(sampleElevation(model, 50, -30)).toBeNull();
+    expect(nearestPointElevation(model, 50, -30)).toBeCloseTo(0);
+    expect(nearestPointElevation(model, 50, 130)).toBeCloseTo(50);
+  });
+});
+
+describe("terrainElevationForFootprint — 건물 G.L.", () => {
+  const model = buildTerrainModel(slopeContours())!;
+
+  it("경사면 위 사각형 footprint → 꼭짓점 고도 평균", () => {
+    // y=20(z=10)과 y=40(z=20) 사이 사각형 → 평균 (10+10+20+20)/4 = 15
+    const gl = terrainElevationForFootprint(model, [
+      { x: 30, y: 20 },
+      { x: 60, y: 20 },
+      { x: 60, y: 40 },
+      { x: 30, y: 40 },
+    ]);
+    expect(gl).toBeCloseTo(15);
+  });
+
+  it("평평한 구간의 건물은 그 표고 그대로 (파묻힘·뜸 없음)", () => {
+    const gl = terrainElevationForFootprint(model, [
+      { x: 20, y: 20 },
+      { x: 80, y: 20 },
+    ]);
+    expect(gl).toBeCloseTo(10);
+  });
+
+  it("hull 밖으로 드래그해도 최근접 표고로 폴백 — 0으로 튀지 않음", () => {
+    const gl = terrainElevationForFootprint(model, [
+      { x: 50, y: 110 },
+      { x: 60, y: 115 },
+    ]);
+    expect(gl).toBeCloseTo(50);
+  });
+});
+
+describe("clipTriangles — 대지경계 클리핑", () => {
+  const model = buildTerrainModel(slopeContours())!;
+
+  it("경계 없으면 전체 삼각형 유지", () => {
+    expect(clipTriangles(model, null)).toHaveLength(model.triangles.length);
+  });
+
+  it("대지경계 안 무게중심 삼각형만 남는다", () => {
+    const site = [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 40 },
+      { x: 0, y: 40 },
+    ];
+    const clipped = clipTriangles(model, site);
+    expect(clipped.length).toBeGreaterThan(0);
+    expect(clipped.length).toBeLessThan(model.triangles.length);
+    // 남은 삼각형 무게중심은 전부 y ≤ 40 근방
+    for (let i = 0; i < clipped.length; i += 3) {
+      const cy =
+        (model.points[clipped[i]].y +
+          model.points[clipped[i + 1]].y +
+          model.points[clipped[i + 2]].y) /
+        3;
+      expect(cy).toBeLessThan(40);
+    }
   });
 });
