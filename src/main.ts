@@ -15,7 +15,14 @@ import {
   footprintCentroid,
   mirrorBuilding,
   setSelected,
+  worldFootprint,
 } from "./buildings";
+import {
+  buildTerrainModel,
+  createTerrainGroup,
+  terrainElevationForFootprint,
+  type TerrainModel,
+} from "./terrain";
 import { createDaylightOverlay, runDaylightCheck, type DaylightResult } from "./daylight";
 import {
   createNorthSetbackOverlay,
@@ -126,6 +133,64 @@ const libraryCheckedIds = new Set<string>();
 const cloneOrigin = new Map<string, string>();
 let sceneSeq = 0;
 
+// ---------- M7 지형 (TIN) ----------
+
+/** 현재 로드된 지형 TIN — null이면 평지 모드 (기존 동작 그대로) */
+let terrainModel: TerrainModel | null = null;
+let terrainGroup: THREE.Group | null = null;
+let terrainVisible = true;
+let terrainWireframe = false;
+
+/** 지형 클리핑 기준 — 닫힌 SITE_BOUNDARY 오버레이 (없으면 클리핑 없이 전체 표시) */
+function siteClipPolygon(): Point2[] | null {
+  const site = project.siteOverlays.find(
+    (o) => o.layer === "SITE_BOUNDARY" && o.points.length >= 3,
+  );
+  return site ? site.points : null;
+}
+
+/**
+ * project.terrainPoints로 TIN·지형 메시를 다시 만든다 — DXF 로드/병합·.view 복원 후 호출.
+ * 등고선이 없거나 퇴화(일직선)면 지형 없음 = 평지 모드.
+ */
+function rebuildTerrain(): void {
+  if (terrainGroup) {
+    viewer.terrainRoot.remove(terrainGroup);
+    disposeGroup(terrainGroup);
+    terrainGroup = null;
+  }
+  terrainModel = buildTerrainModel(project.terrainPoints);
+  if (terrainModel) {
+    terrainGroup = createTerrainGroup(terrainModel, siteClipPolygon());
+    applyTerrainVisibility();
+    viewer.terrainRoot.add(terrainGroup);
+  }
+}
+
+/** 지형 표시·와이어프레임 토글 상태를 메시에 반영 + 대지 회색 채움과의 교대 표시 */
+function applyTerrainVisibility(): void {
+  if (terrainGroup) {
+    terrainGroup.visible = terrainVisible;
+    const wire = terrainGroup.getObjectByName("terrain-wire");
+    if (wire) wire.visible = terrainWireframe;
+  }
+  // 지형 메시가 보이는 동안 기존 평지용 회색 SITE_BOUNDARY 채움은 숨긴다 (겹침 방지)
+  const hideFill = terrainModel !== null && terrainVisible;
+  viewer.overlaysRoot.traverse((o) => {
+    if (o.name === "site-fill") o.visible = !hideFill;
+  });
+}
+
+/**
+ * 건물 G.L.(terrainElevation) 재계산 — offset 반영된 월드 footprint 꼭짓점 고도 평균.
+ * 지형이 없으면 0. 렌더 위치(applyOffset)의 y로만 쓰이고 법적 검토에는 미반영(M7 방침).
+ */
+function refreshTerrainElevation(b: Building): void {
+  b.terrainElevation = terrainModel
+    ? terrainElevationForFootprint(terrainModel, worldFootprint(b))
+    : 0;
+}
+
 // ---------- 건물 씬 구성 ----------
 
 function rebuildAll(): void {
@@ -133,6 +198,7 @@ function rebuildAll(): void {
   viewer.buildingsRoot.clear();
   groups.clear();
   for (const b of project.buildings) {
+    refreshTerrainElevation(b);
     const g = createBuildingObject(b);
     groups.set(b.id, g);
     viewer.buildingsRoot.add(g);
@@ -145,6 +211,7 @@ function rebuildOne(b: Building): void {
     viewer.buildingsRoot.remove(old);
     disposeGroup(old);
   }
+  refreshTerrainElevation(b);
   const g = createBuildingObject(b);
   groups.set(b.id, g);
   viewer.buildingsRoot.add(g);
@@ -285,6 +352,7 @@ function refreshList(): void {
       refreshList();
     },
     onOffsetChange: (b) => {
+      refreshTerrainElevation(b); // M7 — 이동하면 지형 고도(G.L.)도 갱신
       const g = groups.get(b.id);
       if (g) applyOffset(g, b);
       updateRotationHandle();
@@ -295,6 +363,7 @@ function refreshList(): void {
       b.offset.dx = 0;
       b.offset.dy = 0;
       b.offset.rotation = 0;
+      refreshTerrainElevation(b);
       const g = groups.get(b.id);
       if (g) applyOffset(g, b);
       refreshList();
@@ -374,13 +443,14 @@ let sceneOrigin: Point2 | null = null;
 function rebuildOverlays(): void {
   viewer.overlaysRoot.clear();
   viewer.overlaysRoot.add(createOverlayGroup(project.siteOverlays));
+  applyTerrainVisibility(); // 새로 만든 site-fill에 지형 표시 상태(채움 숨김) 재적용
 }
 
 function loadDxfText(text: string, sourceName: string, merge: boolean): void {
   const unitMode = (document.getElementById("unit-select") as HTMLSelectElement)
     .value as UnitMode;
   try {
-    const { buildings, overlays, warnings, unitSource } = parseDxfBuildings(
+    const { buildings, overlays, contourPoints, warnings, unitSource } = parseDxfBuildings(
       text,
       unitMode,
     );
@@ -388,12 +458,14 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     for (const b of buildings) b.id = `L${dxfLoadSeq}-${b.id}`;
 
     if (merge && sceneOrigin) {
-      applyRecenterOffset(sceneOrigin, buildings, overlays);
+      applyRecenterOffset(sceneOrigin, buildings, overlays, contourPoints);
       project.siteOverlays.push(...overlays);
+      project.terrainPoints.push(...contourPoints);
     } else {
       sceneOrigin = computeRecenterOffset(buildings, overlays);
-      applyRecenterOffset(sceneOrigin, buildings, overlays);
+      applyRecenterOffset(sceneOrigin, buildings, overlays, contourPoints);
       project.siteOverlays = overlays;
+      project.terrainPoints = contourPoints;
       // 새 프로젝트 시작 — 장면·라이브러리 모두 초기화
       project.buildings = [];
       project.buildingLibrary = [];
@@ -410,6 +482,7 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     for (const b of planBuildings) libraryCheckedIds.add(b.id); // 기본 전체 선택
     project.buildings.push(...adjBuildings);
 
+    rebuildTerrain(); // rebuildAll보다 먼저 — 건물 G.L. 계산이 terrainModel을 참조
     rebuildAll();
     rebuildOverlays();
     viewer.fitToBuildings();
@@ -425,6 +498,9 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
       `— "건물 라이브러리"에서 장면에 추가하세요`;
     if (overlays.length > 0) msg += `, 오버레이 ${overlays.length}개`;
     if (winCount > 0) msg += `, 창면 ${winCount}개`;
+    if (terrainModel) {
+      msg += `, 지형 로드됨 (고도 범위: ${terrainModel.minZ.toFixed(1)}m ~ ${terrainModel.maxZ.toFixed(1)}m)`;
+    }
     if (warnings.length > 0) msg += ` (경고 ${warnings.length}건 — 마우스를 올리면 내용 표시)`;
     setStatus(msg, warnings.length > 0 ? warnings.join("\n\n") : undefined);
     for (const w of warnings) console.warn("[DXF]", w);
@@ -1313,6 +1389,7 @@ document.getElementById("view-file")!.addEventListener("change", async (e) => {
     project.buildings = d.buildings;
     project.buildingLibrary = d.buildingLibrary;
     project.siteOverlays = d.siteOverlays;
+    project.terrainPoints = d.terrainPoints;
     sceneOrigin = d.sceneOrigin;
     // id 카운터는 이어서 발급 — 복원된 건물과 새 건물의 id 충돌 방지
     dxfLoadSeq = Math.max(dxfLoadSeq, d.counters.dxfLoadSeq);
@@ -1323,6 +1400,7 @@ document.getElementById("view-file")!.addEventListener("change", async (e) => {
     selectedId = null;
 
     applyProjectToInputs();
+    rebuildTerrain(); // rebuildAll보다 먼저 — 건물 G.L. 계산이 terrainModel을 참조
     rebuildAll();
     rebuildOverlays();
     viewer.fitToBuildings();
@@ -1334,9 +1412,12 @@ document.getElementById("view-file")!.addEventListener("change", async (e) => {
     updateSiteTotals();
     updateSunFromSlider();
     const saved = d.savedAt ? ` (저장 시각 ${d.savedAt.slice(0, 16).replace("T", " ")})` : "";
+    const terrainInfo = terrainModel
+      ? ` · 지형 로드됨 (고도 범위: ${terrainModel.minZ.toFixed(1)}m ~ ${terrainModel.maxZ.toFixed(1)}m)`
+      : "";
     setStatus(
       `${file.name} 불러옴 — 장면 ${project.buildings.length}동 · ` +
-        `라이브러리 ${project.buildingLibrary.length}동 · 오버레이 ${project.siteOverlays.length}개${saved}`,
+        `라이브러리 ${project.buildingLibrary.length}동 · 오버레이 ${project.siteOverlays.length}개${terrainInfo}${saved}`,
     );
   } catch (err) {
     setStatus(`.view 불러오기 실패: ${(err as Error).message}`);

@@ -1,4 +1,4 @@
-import type { Building, OverlayLine, Point2, Project } from "./types";
+import type { Building, OverlayLine, Point2, Point3, Project } from "./types";
 
 /**
  * .view 파일 — 작업 중인 프로젝트 전체(장면·라이브러리·오버레이·분석 설정)를
@@ -22,6 +22,8 @@ export interface ViewFileData {
   buildings: Building[];
   buildingLibrary: Building[];
   siteOverlays: OverlayLine[];
+  /** M7 지형 등고선 점 — v1 파일에는 없음(복원 시 빈 배열 = 평지) */
+  terrainPoints: Point3[];
 }
 
 export function serializeView(
@@ -40,6 +42,7 @@ export function serializeView(
     buildings: project.buildings,
     buildingLibrary: project.buildingLibrary,
     siteOverlays: project.siteOverlays,
+    terrainPoints: project.terrainPoints,
   };
   return JSON.stringify(data, null, 1);
 }
@@ -88,5 +91,6 @@ export function deserializeView(text: string): ViewFileData {
     buildings: d.buildings,
     buildingLibrary: d.buildingLibrary,
     siteOverlays: Array.isArray(d.siteOverlays) ? d.siteOverlays : [],
+    terrainPoints: Array.isArray(d.terrainPoints) ? d.terrainPoints : [],
   };
 }

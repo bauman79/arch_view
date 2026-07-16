@@ -14,6 +14,8 @@ export class Viewer {
   readonly buildingsRoot = new THREE.Group();
   /** DXF SITE_BOUNDARY/ADJ_BOUNDARY/ROAD_CL/PARK_BOUNDARY 참고선이 담기는 루트 (비인터랙티브) */
   readonly overlaysRoot = new THREE.Group();
+  /** M7 TIN 지형 메시 루트 (비인터랙티브 — 드래그 groundHit는 여전히 y=0 평면 기준) */
+  readonly terrainRoot = new THREE.Group();
   /** 태양 방향 직사광 (setSun으로 갱신) */
   readonly sunLight: THREE.DirectionalLight;
 
@@ -62,7 +64,7 @@ export class Viewer {
     this.scene.add(this.sunLight, this.sunLight.target);
 
     this.setupLightsAndGround();
-    this.scene.add(this.buildingsRoot, this.overlaysRoot);
+    this.scene.add(this.buildingsRoot, this.overlaysRoot, this.terrainRoot);
 
     this.resizeObserver = new ResizeObserver(() => this.onResize());
     this.resizeObserver.observe(container);
@@ -124,11 +126,13 @@ export class Viewer {
     this.scene.add(north);
   }
 
-  /** 건물 + 오버레이(대지경계 등) 전체 바운딩 박스에 맞춰 카메라를 이동 */
+  /** 건물 + 오버레이(대지경계 등) + 지형 전체 바운딩 박스에 맞춰 카메라를 이동 */
   fitToBuildings(): void {
     const box = new THREE.Box3().setFromObject(this.buildingsRoot);
     const overlayBox = new THREE.Box3().setFromObject(this.overlaysRoot);
     if (!overlayBox.isEmpty()) box.union(overlayBox);
+    const terrainBox = new THREE.Box3().setFromObject(this.terrainRoot);
+    if (!terrainBox.isEmpty()) box.union(terrainBox);
     if (box.isEmpty()) return;
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());

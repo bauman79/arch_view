@@ -76,6 +76,12 @@ export interface Building {
    * 비어 있으면 "창 정보 미지정"으로 간주 — 기존 동작(전체 남향 벽 채광사선 검토)을 유지한다.
    */
   windowSegments: [Point2, Point2][];
+  /**
+   * M7 지형 G.L.(m) — footprint 꼭짓점 지형 고도 평균(성절토 평탄화 가정). 렌더링 y
+   * 오프셋에만 쓰이고, 법적 기하 검토(정북·채광·인동)는 동일 레벨 가정이라 참조하지 않는다
+   * (PLAN.md M7 방침 2). 지형 없거나 미계산이면 undefined = 0 (평지).
+   */
+  terrainElevation?: number;
 }
 
 /** DXF 규약(data/DXF_RULES.md)의 참고용 2D 오버레이 레이어 — 건물 매스로 압출되지 않는다 */
@@ -179,6 +185,11 @@ export interface Project {
   /** DXF SITE_BOUNDARY/ADJ_BOUNDARY/ROAD_CL/PARK_BOUNDARY/CONTOUR 참고용 오버레이 선 */
   siteOverlays: OverlayLine[];
   /**
+   * M7 지형 — CONTOUR 레이어 등고선 꼭짓점(m, recenter 적용 후). 빈 배열이면 평지 모드.
+   * TIN 메시는 이 점들로 로드 시마다 재생성한다 (파일에는 원본 점만 저장).
+   */
+  terrainPoints: Point3[];
+  /**
    * DXF에서 불러온 계획주동(PLAN_BLDG) 템플릿 전체 — 장면 포함 여부와 무관하게 누적된다.
    * 사용자가 체크박스로 골라 "장면에 추가"하면 buildings에 복제되어 들어간다.
    * 인접건물(ADJ_BLDG)은 라이브러리를 거치지 않고 로드 즉시 buildings에 추가된다.
@@ -204,6 +215,7 @@ export function defaultProject(): Project {
     site: { latitude: 37.57, longitude: 126.98, northAngle: 0, siteAreaM2: 0 },
     buildings: [],
     siteOverlays: [],
+    terrainPoints: [],
     buildingLibrary: [],
     analysis: {
       gridSize: 1.0,

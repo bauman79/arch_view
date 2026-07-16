@@ -210,7 +210,7 @@ export function createBuildingObject(b: Building): THREE.Group {
   return group;
 }
 
-/** offset(dx, dy, rotation)을 그룹 트랜스폼에 반영 */
+/** offset(dx, dy, rotation)·지형 G.L.(M7)을 그룹 트랜스폼에 반영 */
 export function applyOffset(
   group: THREE.Group,
   b: Building,
@@ -219,7 +219,7 @@ export function applyOffset(
   const c = centroid ?? footprintCentroid(b.footprint);
   group.position.set(
     c.x + b.offset.dx,
-    0,
+    b.terrainElevation ?? 0, // M7 — 지형 없으면 0 (평지)
     -(c.y + b.offset.dy), // DXF y+ → three -z
   );
   group.rotation.y = THREE.MathUtils.degToRad(b.offset.rotation);
