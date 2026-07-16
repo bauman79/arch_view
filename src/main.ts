@@ -28,6 +28,8 @@ import {
   type PvResult,
 } from "./pv";
 import { exportXlsx } from "./excel";
+import { buildDxfText, hasExportContent } from "./dxfexport";
+import { deserializeView, serializeView } from "./viewfile";
 import { EPW_FILES, parseEpw, type EpwData } from "./epw";
 import {
   createPvEnergyOverlay,
@@ -1230,6 +1232,113 @@ document.getElementById("export-xlsx")!.addEventListener("click", () => {
   setStatus(
     `엑셀 내보냄 — ${filename} (배치 개요 · 일조권 · 정북사선 · PV · 바람길 · 일조시간, 총 ${t.total}세대)`,
   );
+});
+
+// ---------- DXF 배치도 내보내기 / .view 프로젝트 저장·불러오기 ----------
+
+/** 텍스트를 파일로 다운로드 (DXF·.view 공용) */
+function downloadText(text: string, filename: string, mime: string): void {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById("export-dxf")!.addEventListener("click", () => {
+  if (!hasExportContent(project)) {
+    setStatus("내보낼 배치가 없습니다 — 먼저 DXF를 불러오거나 주동을 배치하세요.");
+    return;
+  }
+  const text = buildDxfText(project, sceneOrigin);
+  const filename = `arch_view_배치도_${new Date().toISOString().slice(0, 10)}.dxf`;
+  downloadText(text, filename, "application/dxf");
+  const plan = project.buildings.filter((b) => b.type === "계획주동").length;
+  const adj = project.buildings.length - plan;
+  setStatus(
+    `DXF 내보냄 — ${filename} (계획주동 ${plan}동 · 인접건물 ${adj}동 · ` +
+      `오버레이 ${project.siteOverlays.length}개, mm 단위 R12)`,
+  );
+});
+
+/** 현재 UI 입력값(위치·격자·사선 기준·일조권 설정·대지면적)을 project에 반영 */
+function syncAllSettings(): void {
+  syncAnalysisSettings();
+  syncSetbackRules();
+  project.analysis.sunHours.rule = sunHoursRuleSelect.value as SunHoursRule;
+  project.analysis.sunHours.timeStep = Math.max(
+    5,
+    parseFloat(sunHoursStepInput.value) || 10,
+  );
+  project.site.siteAreaM2 = Math.max(0, parseFloat(siteAreaInput.value) || 0);
+}
+
+document.getElementById("save-view")!.addEventListener("click", () => {
+  syncAllSettings();
+  const json = serializeView(project, sceneOrigin, { dxfLoadSeq, sceneSeq });
+  const filename = `arch_view_${new Date().toISOString().slice(0, 10)}.view`;
+  downloadText(json, filename, "application/json");
+  setStatus(
+    `프로젝트 저장 — ${filename} (장면 ${project.buildings.length}동 · ` +
+      `라이브러리 ${project.buildingLibrary.length}동 · 분석 설정 포함)`,
+  );
+});
+
+/** .view에서 복원한 project 값을 UI 입력창에 되반영 */
+function applyProjectToInputs(): void {
+  latInput.value = String(project.site.latitude);
+  lngInput.value = String(project.site.longitude);
+  dateInput.value = project.analysis.date;
+  gridInput.value = String(project.analysis.gridSize);
+  siteAreaInput.value = String(project.site.siteAreaM2);
+  fillSetbackInputs(project.analysis.setbackRules);
+  sunHoursRuleSelect.value = project.analysis.sunHours.rule;
+  sunHoursStepInput.value = String(project.analysis.sunHours.timeStep);
+}
+
+document.getElementById("view-file")!.addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    const d = deserializeView(await file.text());
+    project.site = d.site;
+    project.analysis = d.analysis;
+    project.buildings = d.buildings;
+    project.buildingLibrary = d.buildingLibrary;
+    project.siteOverlays = d.siteOverlays;
+    sceneOrigin = d.sceneOrigin;
+    // id 카운터는 이어서 발급 — 복원된 건물과 새 건물의 id 충돌 방지
+    dxfLoadSeq = Math.max(dxfLoadSeq, d.counters.dxfLoadSeq);
+    sceneSeq = Math.max(sceneSeq, d.counters.sceneSeq);
+    cloneOrigin.clear();
+    libraryCheckedIds.clear();
+    for (const b of project.buildingLibrary) libraryCheckedIds.add(b.id);
+    selectedId = null;
+
+    applyProjectToInputs();
+    rebuildAll();
+    rebuildOverlays();
+    viewer.fitToBuildings();
+    refreshList();
+    refreshLibraryList();
+    updateRotationHandle();
+    invalidateAnalysis();
+    updateSetbackChecks();
+    updateSiteTotals();
+    updateSunFromSlider();
+    const saved = d.savedAt ? ` (저장 시각 ${d.savedAt.slice(0, 16).replace("T", " ")})` : "";
+    setStatus(
+      `${file.name} 불러옴 — 장면 ${project.buildings.length}동 · ` +
+        `라이브러리 ${project.buildingLibrary.length}동 · 오버레이 ${project.siteOverlays.length}개${saved}`,
+    );
+  } catch (err) {
+    setStatus(`.view 불러오기 실패: ${(err as Error).message}`);
+    console.error(err);
+  }
+  input.value = "";
 });
 
 // ---------- 시간 슬라이더 — 태양 위치·그림자 미리보기 ----------

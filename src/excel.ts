@@ -5,7 +5,7 @@ import {
   footprintAreaM2,
   grossFloorAreaM2,
   MASS_TYPE_LABEL,
-  totalUnits,
+  siteUnitTotals,
   unitBreakdown,
 } from "./massing";
 import type { PvResult } from "./pv";
@@ -50,33 +50,38 @@ function sheetFromRows(
 
 // ---------- 시트 1: 배치 개요 ----------
 
-/** 계획주동 unitMix에 등장하는 전용면적 타입 컬럼 (등장 순서 유지) */
-export function unitTypeColumns(buildings: Building[]): string[] {
-  const seen: string[] = [];
-  for (const b of buildings) {
-    if (b.type !== "계획주동") continue;
-    for (const m of b.unitMix) {
-      if (!seen.includes(m.unitType)) seen.push(m.unitType);
-    }
-  }
-  return seen;
+/**
+ * 배치 개요의 "주동타입" 표기 — DXF 폴리곤 주동은 massType이 "custom"이라
+ * 형상 타입명이 없으므로, 사용자가 실제로 식별하는 평형 구성(59㎡+84㎡ 등)을 보여준다.
+ * 템플릿 주동은 형상명(판상형 등)을 표기 — 평형별 상세는 "평형" 컬럼의 행 분리가 담당.
+ */
+export function buildingTypeLabel(b: Building): string {
+  if (b.massType !== "custom") return MASS_TYPE_LABEL[b.massType];
+  const mix = b.unitMix
+    .filter((m) => Math.max(0, Math.round(m.countPerFloor)) > 0)
+    .map((m) => m.unitType);
+  return mix.join("+") || "-";
 }
 
+/**
+ * 배치 개요는 계획주동만 — 인접건물은 타 대지의 기존 건물이라 개요 정보 대상이 아님.
+ * 한 주동에 평형이 여러 개면 평형별로 행을 분리한다. 건물 단위 값(미러·층수·면적 등)은
+ * 첫 행에만 적어 합계 중복 집계를 막고, 건물명은 필터 편의를 위해 모든 행에 반복한다.
+ * 마지막에 "세대수 집계" 섹션 — 전체 세대수 합계 + 타입별 세대수.
+ */
 export function buildOverviewRows(project: Project): Cell[][] {
   const { buildings, site } = project;
-  const unitTypes = unitTypeColumns(buildings);
+  const planBuildings = buildings.filter((b) => b.type === "계획주동");
   const header: Cell[] = [
     "건물명",
-    "구분",
     "주동타입",
     "미러",
     "층수",
     "필로티",
     "분절",
-    "층당세대",
-    "평형 층당세대수 합",
-    "총 세대수(층수×층당)",
-    ...unitTypes.map((t) => `${t} 세대`),
+    "평형",
+    "층당세대수",
+    "총 세대수",
     "건축면적(㎡)",
     "연면적(㎡)",
     "건폐율(%)",
@@ -87,51 +92,46 @@ export function buildOverviewRows(project: Project): Cell[][] {
   const siteArea = site.siteAreaM2;
   const hasSite = siteArea > 0;
 
-  for (const b of buildings) {
-    const isPlan = b.type === "계획주동";
+  for (const b of planBuildings) {
     const area = footprintAreaM2(b);
     const gfa = grossFloorAreaM2(b);
-    const total = isPlan && b.unitsPerFloor > 0 ? totalUnits(b) : null;
-    const mixPerFloor =
-      isPlan && b.unitsPerFloor > 0
-        ? b.unitMix.reduce((s, m) => s + Math.max(0, Math.round(m.countPerFloor)), 0)
-        : null;
-    const byType = new Map(
-      unitBreakdown(b).map((u) => [u.unitType, u.count]),
-    );
-    rows.push([
-      b.name,
-      b.type,
-      MASS_TYPE_LABEL[b.massType],
+    const buildingCells: Cell[] = [
+      buildingTypeLabel(b),
       mirrorLabel(b),
       b.floors,
       b.pilotiFloors,
-      isPlan ? Math.max(1, b.segments) : null,
-      isPlan && b.unitsPerFloor > 0 ? b.unitsPerFloor : null,
-      mixPerFloor,
-      total,
-      ...unitTypes.map<Cell>((t) =>
-        total !== null ? (byType.get(t) ?? 0) : null,
-      ),
+      Math.max(1, b.segments),
+    ];
+    const areaCells: Cell[] = [
       round(area),
       round(gfa),
-      // 건폐율·용적률은 계획주동만 (인접건물은 타 대지)
-      isPlan && hasSite ? round((area / siteArea) * 100, 2) : null,
-      isPlan && hasSite ? round((gfa / siteArea) * 100, 2) : null,
-    ]);
+      hasSite ? round((area / siteArea) * 100, 2) : null,
+      hasSite ? round((gfa / siteArea) * 100, 2) : null,
+    ];
+    const perFloor = new Map(
+      b.unitMix.map((m) => [m.unitType, Math.max(0, Math.round(m.countPerFloor))]),
+    );
+    const mix =
+      b.unitsPerFloor > 0 ? unitBreakdown(b).filter((u) => u.count > 0) : [];
+    if (mix.length === 0) {
+      rows.push([b.name, ...buildingCells, "-", null, null, ...areaCells]);
+      continue;
+    }
+    mix.forEach((u, i) => {
+      rows.push([
+        b.name,
+        ...(i === 0 ? buildingCells : [null, null, null, null, null]),
+        u.unitType,
+        perFloor.get(u.unitType) ?? null,
+        u.count,
+        ...(i === 0 ? areaCells : [null, null, null, null]),
+      ]);
+    });
   }
 
   // 합계 (계획주동 기준)
   const stats = coverageStats(buildings, siteArea);
-  let totalSum = 0;
-  const typeSum = new Map<string, number>();
-  for (const b of buildings) {
-    if (b.type !== "계획주동" || b.unitsPerFloor <= 0) continue;
-    totalSum += totalUnits(b);
-    for (const u of unitBreakdown(b)) {
-      typeSum.set(u.unitType, (typeSum.get(u.unitType) ?? 0) + u.count);
-    }
-  }
+  const totals = siteUnitTotals(buildings);
   rows.push([
     "합계 (계획주동)",
     null,
@@ -141,14 +141,20 @@ export function buildOverviewRows(project: Project): Cell[][] {
     null,
     null,
     null,
-    null,
-    totalSum,
-    ...unitTypes.map<Cell>((t) => typeSum.get(t) ?? 0),
+    totals.total,
     round(stats.coverageM2),
     round(stats.grossM2),
     stats.bcrPct !== null ? round(stats.bcrPct, 2) : null,
     stats.farPct !== null ? round(stats.farPct, 2) : null,
   ]);
+
+  // 세대수 집계 — 전체 합계 + 타입별 세대수
+  rows.push([]);
+  rows.push(["세대수 집계", "세대수"]);
+  rows.push(["전체 세대수", totals.total]);
+  for (const u of totals.byType) {
+    rows.push([u.unitType, u.count]);
+  }
 
   rows.push([]);
   rows.push(["대지면적(㎡)", hasSite ? siteArea : "미입력"]);
@@ -390,12 +396,16 @@ export function buildWorkbook(
 ): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
   const overview = buildOverviewRows(project);
+  // 헤더 + "세대수 집계" 섹션 제목행 굵게
+  const overviewBold = [0, overview.findIndex((r) => r[0] === "세대수 집계")].filter(
+    (i) => i >= 0,
+  );
   XLSX.utils.book_append_sheet(
     wb,
     sheetFromRows(
       overview,
-      [0],
-      [16, 9, 9, 8, 6, 7, 6, 9, 12, 10, 9, 9, 9, 12, 12, 10, 10],
+      overviewBold,
+      [16, 16, 8, 6, 7, 6, 10, 10, 10, 12, 12, 10, 10],
     ),
     "배치 개요",
   );

@@ -269,20 +269,25 @@ export function mirrorBuilding(b: Building, axis: "h" | "v"): void {
   else b.mirroredV = !b.mirroredV;
 }
 
-/** offset(이동·회전)이 반영된 DXF 평면 월드 좌표 footprint */
-export function worldFootprint(b: Building): Point2[] {
+/** offset(이동·회전)을 임의 점에 적용하는 변환 — footprint·windowSegments 공용 */
+export function worldTransformer(b: Building): (p: Point2) => Point2 {
   const c = footprintCentroid(b.footprint);
   const th = THREE.MathUtils.degToRad(b.offset.rotation);
   const cos = Math.cos(th);
   const sin = Math.sin(th);
-  return b.footprint.map((p) => {
+  return (p) => {
     const rx = p.x - c.x;
     const ry = p.y - c.y;
     return {
       x: c.x + rx * cos - ry * sin + b.offset.dx,
       y: c.y + rx * sin + ry * cos + b.offset.dy,
     };
-  });
+  };
+}
+
+/** offset(이동·회전)이 반영된 DXF 평면 월드 좌표 footprint */
+export function worldFootprint(b: Building): Point2[] {
+  return b.footprint.map(worldTransformer(b));
 }
 
 export function setSelected(group: THREE.Group, selected: boolean): void {

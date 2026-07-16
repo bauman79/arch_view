@@ -53,35 +53,57 @@ describe("엑셀 내보내기 round-trip", () => {
     ]);
   });
 
-  it("배치 개요: 헤더·건물 행·세대수·숫자 타입", () => {
+  it("배치 개요: 헤더·평형별 행 분리·세대수·숫자 타입", () => {
     const wb = roundTrip(buildWorkbook(mkProject(), null, null, null));
     const ws = wb.Sheets["배치 개요"];
-    // 헤더 (한글 깨짐 없이 왕복)
+    // 헤더 (한글 깨짐 없이 왕복) — 평형별 행 분리 구조
     expect(cell(ws, "A1")?.v).toBe("건물명");
-    expect(cell(ws, "D1")?.v).toBe("미러");
-    expect(cell(ws, "I1")?.v).toBe("평형 층당세대수 합");
-    expect(cell(ws, "J1")?.v).toBe("총 세대수(층수×층당)");
-    expect(cell(ws, "K1")?.v).toBe("59㎡ 세대");
-    // 건물 행: 판상형 1 — 10층·필로티1(주거9층)·층당4 → 평형 층당(2/1/1) × 9층 = 36세대(18/9/9)
+    expect(cell(ws, "B1")?.v).toBe("주동타입");
+    expect(cell(ws, "C1")?.v).toBe("미러");
+    expect(cell(ws, "G1")?.v).toBe("평형");
+    expect(cell(ws, "H1")?.v).toBe("층당세대수");
+    expect(cell(ws, "I1")?.v).toBe("총 세대수");
+    // 첫 행: 판상형 1 — 10층·필로티1(주거9층), 59㎡ 2세대/층 × 9층 = 18
     expect(cell(ws, "A2")?.v).toBe("판상형 1");
-    expect(cell(ws, "C2")?.v).toBe("판상형");
-    expect(cell(ws, "D2")?.v).toBe("없음"); // 미러 미적용
-    expect(cell(ws, "E2")?.v).toBe(10);
-    expect(cell(ws, "F2")?.v).toBe(1);
-    expect(cell(ws, "I2")?.v).toBe(4); // 평형 층당세대수 합 = 2+1+1
-    expect(cell(ws, "J2")?.v).toBe(36);
-    expect(cell(ws, "J2")?.t).toBe("n"); // 숫자 타입
-    expect(cell(ws, "K2")?.v).toBe(18);
-    expect(cell(ws, "L2")?.v).toBe(9);
-    expect(cell(ws, "M2")?.v).toBe(9);
-    // 건축면적 528㎡ / 대지 5000㎡ → 건폐율 10.56%, 용적률 528×9/5000 = 95.04%
-    expect(cell(ws, "N2")?.v).toBeCloseTo(528, 1);
-    expect(cell(ws, "P2")?.v).toBeCloseTo(10.56, 2);
-    expect(cell(ws, "P2")?.t).toBe("n");
-    expect(cell(ws, "Q2")?.v).toBeCloseTo(95.04, 2);
+    expect(cell(ws, "B2")?.v).toBe("판상형");
+    expect(cell(ws, "C2")?.v).toBe("없음"); // 미러 미적용
+    expect(cell(ws, "D2")?.v).toBe(10);
+    expect(cell(ws, "E2")?.v).toBe(1);
+    expect(cell(ws, "G2")?.v).toBe("59㎡");
+    expect(cell(ws, "H2")?.v).toBe(2);
+    expect(cell(ws, "I2")?.v).toBe(18);
+    expect(cell(ws, "I2")?.t).toBe("n"); // 숫자 타입
+    // 건축면적 528㎡ / 대지 5000㎡ → 건폐율 10.56%, 용적률 528×9/5000 = 95.04% (첫 행에만)
+    expect(cell(ws, "J2")?.v).toBeCloseTo(528, 1);
+    expect(cell(ws, "L2")?.v).toBeCloseTo(10.56, 2);
+    expect(cell(ws, "L2")?.t).toBe("n");
+    expect(cell(ws, "M2")?.v).toBeCloseTo(95.04, 2);
+    // 나머지 평형은 별도 행 — 건물명 반복, 건물 단위 값(층수·면적)은 빈 칸
+    expect(cell(ws, "A3")?.v).toBe("판상형 1");
+    expect(cell(ws, "G3")?.v).toBe("84㎡");
+    expect(cell(ws, "I3")?.v).toBe(9);
+    expect(cell(ws, "D3")).toBeUndefined();
+    expect(cell(ws, "J3")).toBeUndefined();
+    expect(cell(ws, "A4")?.v).toBe("판상형 1");
+    expect(cell(ws, "G4")?.v).toBe("101㎡");
+    expect(cell(ws, "I4")?.v).toBe(9);
     // 합계 행
-    expect(cell(ws, "A3")?.v).toBe("합계 (계획주동)");
-    expect(cell(ws, "J3")?.v).toBe(36);
+    expect(cell(ws, "A5")?.v).toBe("합계 (계획주동)");
+    expect(cell(ws, "I5")?.v).toBe(36);
+  });
+
+  it("세대수 집계 섹션: 전체 세대수 합계 + 타입별 세대수", () => {
+    const wb = roundTrip(buildWorkbook(mkProject(), null, null, null));
+    const rows = XLSX.utils.sheet_to_json<(string | number)[]>(
+      wb.Sheets["배치 개요"],
+      { header: 1 },
+    );
+    const head = rows.findIndex((r) => r[0] === "세대수 집계");
+    expect(head).toBeGreaterThan(0);
+    expect(rows[head + 1]).toEqual(["전체 세대수", 36]);
+    expect(rows[head + 2]).toEqual(["59㎡", 18]);
+    expect(rows[head + 3]).toEqual(["84㎡", 9]);
+    expect(rows[head + 4]).toEqual(["101㎡", 9]);
   });
 
   it("층수 변경 시 총 세대수가 자동 재계산된다 (버그 수정 검증)", () => {
@@ -91,10 +113,57 @@ describe("엑셀 내보내기 round-trip", () => {
     const wb = roundTrip(buildWorkbook(p, null, null, null));
     const ws = wb.Sheets["배치 개요"];
     // 19층 × (2/1/1) = 38/19/19 = 76세대
-    expect(cell(ws, "J2")?.v).toBe(76);
-    expect(cell(ws, "K2")?.v).toBe(38);
-    expect(cell(ws, "L2")?.v).toBe(19);
-    expect(cell(ws, "M2")?.v).toBe(19);
+    expect(cell(ws, "I2")?.v).toBe(38); // 59㎡ 행
+    expect(cell(ws, "I3")?.v).toBe(19); // 84㎡ 행
+    expect(cell(ws, "I4")?.v).toBe(19); // 101㎡ 행
+    expect(cell(ws, "A5")?.v).toBe("합계 (계획주동)");
+    expect(cell(ws, "I5")?.v).toBe(76);
+  });
+
+  it("DXF(custom) 주동은 평형 구성으로 표기되고, 타입별 합계가 맞다", () => {
+    const p = mkProject();
+    const dxfB = createTemplateBuilding("slab", 4, 1, 2);
+    dxfB.name = "계획주동_A_1";
+    dxfB.massType = "custom"; // DXF 폴리곤 주동
+    dxfB.floors = 15;
+    dxfB.unitMix = [
+      { unitType: "59㎡", countPerFloor: 2 },
+      { unitType: "84㎡", countPerFloor: 2 },
+    ];
+    p.buildings.push(dxfB);
+    const wb = roundTrip(buildWorkbook(p, null, null, null));
+    const ws = wb.Sheets["배치 개요"];
+    // custom이 아니라 평형 구성이 보인다 (판상형 3행 다음 = 5행)
+    expect(cell(ws, "A5")?.v).toBe("계획주동_A_1");
+    expect(cell(ws, "B5")?.v).toBe("59㎡+84㎡");
+    expect(cell(ws, "G5")?.v).toBe("59㎡");
+    expect(cell(ws, "I5")?.v).toBe(30); // 15층 × 2세대
+    expect(cell(ws, "G6")?.v).toBe("84㎡");
+    expect(cell(ws, "I6")?.v).toBe(30);
+    // 전체 합계 36 + 60 = 96
+    expect(cell(ws, "A7")?.v).toBe("합계 (계획주동)");
+    expect(cell(ws, "I7")?.v).toBe(96);
+    // 타입별 집계: 59㎡ = 18(판상형) + 30(custom) = 48, 84㎡ = 9 + 30 = 39
+    const rows = XLSX.utils.sheet_to_json<(string | number)[]>(ws, { header: 1 });
+    const head = rows.findIndex((r) => r[0] === "세대수 집계");
+    expect(rows[head + 1]).toEqual(["전체 세대수", 96]);
+    expect(rows[head + 2]).toEqual(["59㎡", 48]);
+    expect(rows[head + 3]).toEqual(["84㎡", 39]);
+    expect(rows[head + 4]).toEqual(["101㎡", 9]);
+  });
+
+  it("인접건물은 배치 개요에서 제외된다", () => {
+    const p = mkProject();
+    const adj = createTemplateBuilding("slab", 4, 1, 9);
+    adj.name = "인접건물 A";
+    adj.type = "인접건물";
+    adj.unitsPerFloor = 0;
+    adj.unitMix = [];
+    p.buildings.push(adj);
+    const wb = roundTrip(buildWorkbook(p, null, null, null));
+    const rows = XLSX.utils.sheet_to_json<string[]>(wb.Sheets["배치 개요"], { header: 1 });
+    expect(rows.some((r) => r[0] === "인접건물 A")).toBe(false);
+    expect(rows.some((r) => r[0] === "판상형 1")).toBe(true);
   });
 
   it("헤더 굵게 (쓰기 전 워크북에서 스타일 확인)", () => {
@@ -212,7 +281,7 @@ describe("엑셀 내보내기 round-trip", () => {
     p.site.siteAreaM2 = 0;
     const wb = roundTrip(buildWorkbook(p, null, null, null));
     const ws = wb.Sheets["배치 개요"];
-    expect(cell(ws, "P2")).toBeUndefined(); // 건폐율 빈 칸
+    expect(cell(ws, "L2")).toBeUndefined(); // 건폐율 빈 칸
     // 대지면적 행
     const rows = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 });
     const siteRow = rows.find((r) => r[0] === "대지면적(㎡)");

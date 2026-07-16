@@ -6,9 +6,10 @@
     <title>arch_view — 일조·태양광 시뮬레이터</title>
     <style>
       /* ============================================================
-         arch_view 다크 테마 — 색상 시스템
-         캔버스 #070D1A · 패널 #0D1525 · 툴바 #0F1929 · 카드 #111827
-         보더 #1E2D4A / #131E35 · 액센트(앰버) #E0921A
+         arch_view 색상 시스템 — 캔버스는 다크, 좌우 패널은 라이트
+         캔버스 #070D1A · 툴바/상태바 #0F1929 (다크 유지)
+         패널 #F5F7FA · 카드 #FFFFFF · 보더 #C6D0DD / #E2E8F0
+         본문 #1E293B · 보조 #5B6B80 · 힌트 #6E7F94 · 액센트(앰버) #E0921A
          ============================================================ */
       * {
         box-sizing: border-box;
@@ -92,12 +93,12 @@
         overflow: visible;
       }
 
-      /* ---------------- 버튼 ---------------- */
+      /* ---------------- 버튼 (기본: 라이트 — 패널·모달용) ---------------- */
       .btn,
       button {
-        background: #111827;
-        color: #cbd5e1;
-        border: 1px solid #1e2d4a;
+        background: #ffffff;
+        color: #334155;
+        border: 1px solid #c6d0dd;
         border-radius: 5px;
         padding: 4px 10px;
         font-size: 12px;
@@ -109,6 +110,20 @@
 
       .btn:hover,
       button:hover {
+        background: #eef2f7;
+        border-color: #9fb0c4;
+      }
+
+      /* 툴바·상태바는 다크 유지 — 툴바 안 버튼만 다크로 되돌림 */
+      #toolbar .btn:not(.primary),
+      #toolbar button:not(.primary) {
+        background: #111827;
+        color: #cbd5e1;
+        border-color: #1e2d4a;
+      }
+
+      #toolbar .btn:not(.primary):hover,
+      #toolbar button:not(.primary):hover {
         background: #17233a;
         border-color: #2a3f66;
       }
@@ -129,13 +144,13 @@
 
       /* M3 검토 토글 — 켜져 있는 동안 실시간 갱신 */
       button.toggled {
-        background: #123524;
+        background: #e6f7ed;
         border-color: #22c55e;
-        color: #6ee7a0;
+        color: #15803d;
       }
 
       button.toggled:hover {
-        background: #17422d;
+        background: #d5f2e1;
       }
 
       .btn.mini,
@@ -150,17 +165,25 @@
         text-align: center;
       }
 
-      /* ---------------- 폼 요소 ---------------- */
+      /* ---------------- 폼 요소 (기본: 라이트 — 패널·모달용) ---------------- */
       select,
       input[type="number"],
       input[type="text"],
       input[type="date"] {
-        background: #111827;
-        color: #cbd5e1;
-        border: 1px solid #1e2d4a;
+        background: #ffffff;
+        color: #1e293b;
+        border: 1px solid #c6d0dd;
         border-radius: 4px;
         padding: 3px 6px;
         font-size: 12px;
+        color-scheme: light;
+      }
+
+      /* 툴바(다크)의 날짜 입력만 다크 유지 */
+      #toolbar input[type="date"] {
+        background: #111827;
+        color: #cbd5e1;
+        border-color: #1e2d4a;
         color-scheme: dark;
       }
 
@@ -185,12 +208,13 @@
         min-height: 0;
       }
 
-      /* ---------------- 좌측 패널 (220px) ---------------- */
+      /* ---------------- 좌측 패널 (220px, 라이트) ---------------- */
       #left-panel {
         flex: none;
         width: 220px;
-        background: #0d1525;
-        border-right: 0.5px solid #1e2d4a;
+        background: #f5f7fa;
+        color: #1e293b;
+        border-right: 1px solid #d5dce6;
         overflow-y: auto;
         display: flex;
         flex-direction: column;
@@ -198,7 +222,7 @@
 
       .lp-section {
         padding: 10px;
-        border-bottom: 0.5px solid #131e35;
+        border-bottom: 1px solid #e2e8f0;
       }
 
       .lp-section.grow {
@@ -207,13 +231,37 @@
 
       .lp-heading,
       #left-panel summary {
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        color: #4a6080;
+        color: #5b6b80;
         margin-bottom: 8px;
         user-select: none;
+      }
+
+      /* 좌측 패널 분석·실행 버튼 — 가독성 위해 크게 */
+      #left-panel .btn,
+      #left-panel button {
+        font-size: 14px;
+        padding: 6px 12px;
+      }
+
+      #left-panel .btn.mini,
+      #left-panel button.mini {
+        font-size: 13px;
+        padding: 4px 10px;
+      }
+
+      /* 건물 카드 내부의 소형 버튼(삭제·복제 등)은 원래 크기 유지 */
+      #left-panel .accordion-actions button {
+        font-size: 11px;
+        padding: 2px 8px;
+      }
+
+      #left-panel .delete-btn {
+        font-size: 11px;
+        padding: 0 4px;
       }
 
       #left-panel details {
@@ -235,7 +283,7 @@
         content: "▸";
         display: inline-block;
         width: 12px;
-        color: #4a6080;
+        color: #94a3b8;
         transition: transform 0.12s;
       }
 
@@ -254,7 +302,7 @@
       .row label {
         flex: none;
         font-size: 11px;
-        color: #94a3b8;
+        color: #5b6b80;
       }
 
       .row input[type="number"] {
@@ -263,23 +311,23 @@
 
       .mini-label {
         font-size: 11px;
-        color: #94a3b8;
+        color: #5b6b80;
       }
 
       .hint {
         font-size: 11px;
-        color: #4a6080;
+        color: #6e7f94;
         line-height: 1.6;
         margin-bottom: 6px;
       }
 
       code {
-        background: #111827;
-        border: 1px solid #131e35;
+        background: #eef2f7;
+        border: 1px solid #d5dce6;
         border-radius: 3px;
         padding: 0 4px;
         font-size: 10px;
-        color: #94a3b8;
+        color: #475569;
       }
 
       .help-hint {
@@ -298,14 +346,14 @@
         align-items: center;
         gap: 6px;
         font-size: 12px;
-        color: #cbd5e1;
+        color: #334155;
         padding: 4px 6px;
         border-radius: 4px;
         cursor: pointer;
       }
 
       .library-row:hover {
-        background: #111827;
+        background: #e9eef5;
       }
 
       .lib-name {
@@ -325,35 +373,35 @@
       }
 
       .badge.plan {
-        background: rgba(224, 146, 26, 0.14);
-        color: #e0921a;
+        background: rgba(224, 146, 26, 0.16);
+        color: #b06f10;
       }
 
       .badge.adj {
-        background: #131e35;
-        color: #94a3b8;
+        background: #e8edf4;
+        color: #5b6b80;
       }
 
       .badge.lib-sample {
-        background: #131e35;
-        color: #94a3b8;
+        background: #e8edf4;
+        color: #5b6b80;
       }
 
       .badge.lib-dxf {
-        background: rgba(59, 130, 246, 0.14);
-        color: #3b82f6;
+        background: rgba(59, 130, 246, 0.12);
+        color: #2563eb;
       }
 
       /* ---------------- 장면 목록 아코디언 ---------------- */
       .list-section-heading {
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 700;
-        color: #4a6080;
+        color: #5b6b80;
         text-transform: uppercase;
         letter-spacing: 0.06em;
         margin: 10px 0 5px;
         padding-top: 8px;
-        border-top: 0.5px solid #131e35;
+        border-top: 1px solid #e2e8f0;
       }
 
       .list-section-heading:first-child {
@@ -363,10 +411,10 @@
       }
 
       .building-card {
-        border: 1px solid #131e35;
+        border: 1px solid #d5dce6;
         border-radius: 6px;
         margin-bottom: 5px;
-        background: #111827;
+        background: #ffffff;
         overflow: hidden;
       }
 
@@ -383,14 +431,14 @@
       }
 
       .accordion-header:hover {
-        background: #17233a;
+        background: #f1f5f9;
       }
 
       .accordion-arrow {
         flex: none;
         width: 9px;
         font-size: 8px;
-        color: #4a6080;
+        color: #94a3b8;
       }
 
       .accordion-header .bname {
@@ -406,8 +454,8 @@
       .floor-badge {
         flex: none;
         font-size: 10px;
-        color: #94a3b8;
-        background: #131e35;
+        color: #5b6b80;
+        background: #e8edf4;
         border-radius: 3px;
         padding: 1px 4px;
       }
@@ -422,11 +470,11 @@
         width: 7px;
         height: 7px;
         border-radius: 50%;
-        background: #253550; /* 미검토 */
+        background: #d3dce6; /* 미검토 */
       }
 
       .status-dot.na {
-        background: #334155; /* 해당없음/미실행 */
+        background: #b6c2d1; /* 해당없음/미실행 */
       }
 
       .status-dot.pass {
@@ -444,7 +492,7 @@
         line-height: 1.5;
         background: transparent;
         border-color: transparent;
-        color: #4a6080;
+        color: #94a3b8;
       }
 
       .delete-btn:hover {
@@ -455,7 +503,7 @@
 
       .accordion-body {
         padding: 7px 8px 8px;
-        border-top: 0.5px solid #131e35;
+        border-top: 1px solid #e2e8f0;
       }
 
       .brief-line {
@@ -467,7 +515,7 @@
 
       .brief-height {
         font-size: 11px;
-        color: #94a3b8;
+        color: #5b6b80;
       }
 
       .accordion-actions {
@@ -480,13 +528,65 @@
         padding: 2px 8px;
       }
 
-      /* ---------------- 우측 패널 (260px) ---------------- */
+      /* ---------------- 우측 패널 (260px, 라이트) ---------------- */
       #right-panel {
         flex: none;
         width: 260px;
-        background: #0d1525;
-        border-left: 0.5px solid #1e2d4a;
+        background: #f5f7fa;
+        color: #1e293b;
+        border-left: 1px solid #d5dce6;
         overflow-y: auto;
+      }
+
+      /* 세대수 요약 패널 */
+      #unit-summary {
+        padding: 12px;
+        border-bottom: 1px solid #e2e8f0;
+        background: #ffffff;
+      }
+
+      .unit-total {
+        font-size: 13px;
+        color: #334155;
+        margin-bottom: 6px;
+      }
+
+      .unit-total b {
+        color: #b06f10;
+        font-size: 15px;
+      }
+
+      .unit-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .unit-table th {
+        text-align: left;
+        font-weight: 600;
+        color: #5b6b80;
+        border-bottom: 1px solid #d5dce6;
+        padding: 3px 4px;
+      }
+
+      .unit-table td {
+        color: #334155;
+        border-bottom: 1px solid #eef2f6;
+        padding: 3px 4px;
+      }
+
+      .unit-table th.num,
+      .unit-table td.num {
+        text-align: right;
+      }
+
+      .unit-table tr.total-row td {
+        font-weight: 700;
+        color: #1e293b;
+        border-top: 1px solid #c6d0dd;
+        border-bottom: none;
       }
 
       #building-detail {
@@ -500,7 +600,7 @@
         align-items: center;
         justify-content: center;
         text-align: center;
-        color: #4a6080;
+        color: #8494a7;
         font-size: 12px;
         padding: 60px 12px;
       }
@@ -517,14 +617,14 @@
       .detail-name {
         font-size: 14px;
         font-weight: 700;
-        color: #cbd5e1;
+        color: #1e293b;
         overflow: hidden;
         text-overflow: ellipsis;
       }
 
       .detail-type {
         font-size: 11px;
-        color: #94a3b8;
+        color: #5b6b80;
         margin-top: 2px;
       }
 
@@ -540,7 +640,7 @@
         align-items: center;
         margin-bottom: 8px;
         padding-bottom: 8px;
-        border-bottom: 0.5px solid #131e35;
+        border-bottom: 1px solid #e2e8f0;
       }
 
       .building-card .num-row {
@@ -556,7 +656,7 @@
         align-items: center;
         gap: 4px;
         font-size: 11px;
-        color: #94a3b8;
+        color: #5b6b80;
       }
 
       .building-card input[type="number"] {
@@ -565,7 +665,7 @@
 
       .building-card .height-info {
         font-size: 11px;
-        color: #94a3b8;
+        color: #5b6b80;
         margin: 2px 0 8px;
       }
 
@@ -576,13 +676,13 @@
 
       .building-card .mirror-state {
         font-size: 10px;
-        color: #4a6080;
+        color: #8494a7;
       }
 
       /* 평형별 세대수 */
       .building-card .unit-info {
         font-size: 11px;
-        color: #e0921a;
+        color: #b06f10;
         margin-top: 6px;
       }
 
@@ -610,12 +710,12 @@
 
       .building-card .mix-unit-suffix {
         font-size: 10px;
-        color: #4a6080;
+        color: #8494a7;
       }
 
       .building-card .mix-calc {
         font-size: 10px;
-        color: #94a3b8;
+        color: #5b6b80;
         white-space: nowrap;
       }
 
@@ -634,7 +734,7 @@
 
       .building-card .mix-hint {
         font-size: 10px;
-        color: #4a6080;
+        color: #8494a7;
         line-height: 1.5;
         margin-top: 4px;
       }
@@ -649,15 +749,15 @@
       .detail-checks {
         margin-top: 12px;
         padding-top: 10px;
-        border-top: 0.5px solid #131e35;
+        border-top: 1px solid #e2e8f0;
       }
 
       .detail-sec-title {
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        color: #4a6080;
+        color: #5b6b80;
         margin-bottom: 8px;
       }
 
@@ -675,19 +775,19 @@
 
       .chk-label {
         flex: 1;
-        color: #94a3b8;
+        color: #5b6b80;
       }
 
       .chk-text.pass {
-        color: #22c55e;
+        color: #16a34a;
       }
 
       .chk-text.fail {
-        color: #ef4444;
+        color: #dc2626;
       }
 
       .chk-text.na {
-        color: #4a6080;
+        color: #94a3b8;
       }
 
       /* ---------------- 3D 캔버스 ---------------- */
@@ -776,33 +876,33 @@
 
       /* ---------------- 분석 결과 요약 카드 ---------------- */
       .summary-card {
-        border: 1px solid #131e35;
+        border: 1px solid #d5dce6;
         border-radius: 6px;
         padding: 6px 9px;
         margin-top: 8px;
-        background: #111827;
+        background: #ffffff;
         font-size: 11px;
       }
 
       .summary-card .bname {
         font-weight: 600;
         margin-bottom: 3px;
-        color: #cbd5e1;
+        color: #1e293b;
       }
 
       .surf-line {
-        color: #94a3b8;
+        color: #5b6b80;
         line-height: 1.6;
       }
 
       .surf-line b.ok,
       b.ok {
-        color: #22c55e;
+        color: #16a34a;
       }
 
       .surf-line b.bad,
       b.bad {
-        color: #ef4444;
+        color: #dc2626;
       }
 
       #site-area {
@@ -911,20 +1011,21 @@
       }
 
       .modal-box {
-        background: #0d1525;
-        border: 1px solid #1e2d4a;
+        background: #ffffff;
+        color: #1e293b;
+        border: 1px solid #d5dce6;
         border-radius: 10px;
         padding: 18px;
         max-width: 440px;
         max-height: 80vh;
         overflow-y: auto;
-        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
       }
 
       .modal-box h2 {
         font-size: 14px;
         font-weight: 700;
-        color: #cbd5e1;
+        color: #1e293b;
         margin-bottom: 10px;
       }
 
@@ -934,19 +1035,19 @@
         justify-content: flex-end;
       }
 
-      /* ---------------- 스크롤바 ---------------- */
+      /* ---------------- 스크롤바 (라이트 패널 기준) ---------------- */
       ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
       }
 
       ::-webkit-scrollbar-thumb {
-        background: #1e2d4a;
+        background: #c3cdd9;
         border-radius: 4px;
       }
 
       ::-webkit-scrollbar-thumb:hover {
-        background: #2a3f66;
+        background: #a9b8cc;
       }
 
       ::-webkit-scrollbar-track {
@@ -963,6 +1064,9 @@
         <input type="file" id="dxf-file" accept=".dxf" hidden />
         <label class="btn" for="dxf-file-add">DXF 추가</label>
         <input type="file" id="dxf-file-add" accept=".dxf" hidden />
+        <label class="btn" for="view-file">프로젝트 열기</label>
+        <input type="file" id="view-file" accept=".view" hidden />
+        <button id="save-view" class="btn">프로젝트 저장</button>
         <div class="tb-spacer"></div>
         <div id="tb-sun">
           <label class="tb-date-label" for="date-input">분석일</label>
@@ -975,6 +1079,7 @@
         </div>
         <div class="tb-spacer"></div>
         <button id="show-layer-rules" class="btn">레이어 규약</button>
+        <button id="export-dxf" class="btn">DXF 내보내기</button>
         <button id="export-xlsx" class="btn primary">엑셀 내보내기</button>
       </header>
 
@@ -1217,8 +1322,9 @@
               </div>
               <div id="bcr-far" class="hint"></div>
               <p class="hint">
-                계획주동·세대수 합계는 하단 상태바에 표시됩니다. 엑셀 내보내기는
-                툴바 우측 버튼 — 시트 4개(배치 개요 · 일조권 · 정북사선 · PV).
+                세대수 합계·타입별 집계는 우측 패널 "세대수 요약"과 하단 상태바에
+                표시됩니다. 엑셀 내보내기는 툴바 우측 버튼 — 시트 6개(배치 개요 ·
+                일조권 · 정북사선 · PV · 바람길 · 일조시간).
               </p>
             </details>
 
@@ -1247,8 +1353,14 @@
           </div>
         </main>
 
-        <!-- 우측 패널: 선택 건물 상세 -->
+        <!-- 우측 패널: 세대수 요약 + 선택 건물 상세 -->
         <aside id="right-panel">
+          <section id="unit-summary">
+            <div class="detail-sec-title">세대수 요약</div>
+            <div id="unit-summary-body">
+              <p class="hint">계획주동을 배치하면 전체·타입별 세대수가 표시됩니다.</p>
+            </div>
+          </section>
           <div id="building-detail">
             <div class="detail-empty">
               건물을 선택하세요

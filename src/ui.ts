@@ -7,6 +7,7 @@ import {
   totalUnits,
   unitBreakdown,
   unitSummaryText,
+  type SiteUnitTotals,
 } from "./massing";
 import type { NorthSetbackResult } from "./northsetback";
 import { PV_TOP_THRESHOLD, type PvBuildingSummary } from "./pv";
@@ -648,15 +649,16 @@ export function refreshUnitInfo(b: Building): void {
 
 /**
  * M6: 사이드 패널 하단 — 전체 사이트 세대수 합계 + 건폐율·용적률.
+ * 우측 패널 상단 "세대수 요약"(전체 합계 + 타입별 표)도 여기서 함께 갱신 —
  * 배치·설정이 바뀔 때마다 호출 (결정적 계산이라 비용 무시 가능).
  */
 export function renderSiteTotals(
   buildings: Building[],
   siteAreaM2: number,
 ): void {
+  const t = siteUnitTotals(buildings);
   const totalsEl = document.getElementById("site-totals");
   if (totalsEl) {
-    const t = siteUnitTotals(buildings);
     if (t.buildingCount === 0) {
       totalsEl.textContent = "계획주동이 없습니다.";
     } else {
@@ -666,6 +668,7 @@ export function renderSiteTotals(
         (mix ? ` (${mix})` : "");
     }
   }
+  renderUnitSummary(t);
   const bcrEl = document.getElementById("bcr-far");
   if (bcrEl) {
     const s = coverageStats(buildings, siteAreaM2);
@@ -675,6 +678,65 @@ export function renderSiteTotals(
         : `건폐율 ${s.bcrPct.toFixed(1)}% · 용적률 ${s.farPct!.toFixed(1)}%` +
           ` (건축면적 ${s.coverageM2.toFixed(0)}㎡ · 연면적 ${s.grossM2.toFixed(0)}㎡)`;
   }
+}
+
+/**
+ * 우측 패널 "세대수 요약" — 전체 세대수 합계 + 타입별 세대수 표.
+ * unitType은 사용자 입력 문자열이라 innerHTML 대신 DOM 생성으로 넣는다.
+ */
+function renderUnitSummary(t: SiteUnitTotals): void {
+  const host = document.getElementById("unit-summary-body");
+  if (!host) return;
+  host.innerHTML = "";
+  if (t.buildingCount === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "계획주동을 배치하면 전체·타입별 세대수가 표시됩니다.";
+    host.appendChild(p);
+    return;
+  }
+  const totalLine = document.createElement("div");
+  totalLine.className = "unit-total";
+  const b = document.createElement("b");
+  b.textContent = String(t.total);
+  totalLine.append(`계획주동 ${t.buildingCount}동 · 총 `, b, "세대");
+  host.appendChild(totalLine);
+
+  if (t.byType.length === 0) return;
+  const table = document.createElement("table");
+  table.className = "unit-table";
+  const thead = table.createTHead().insertRow();
+  for (const [text, cls] of [
+    ["타입", ""],
+    ["세대수", "num"],
+    ["비율", "num"],
+  ] as const) {
+    const th = document.createElement("th");
+    th.textContent = text;
+    if (cls) th.className = cls;
+    thead.appendChild(th);
+  }
+  const tbody = table.createTBody();
+  for (const u of t.byType) {
+    const tr = tbody.insertRow();
+    tr.insertCell().textContent = u.unitType;
+    const cnt = tr.insertCell();
+    cnt.className = "num";
+    cnt.textContent = String(u.count);
+    const pct = tr.insertCell();
+    pct.className = "num";
+    pct.textContent = t.total > 0 ? `${((u.count / t.total) * 100).toFixed(1)}%` : "-";
+  }
+  const totalRow = tbody.insertRow();
+  totalRow.className = "total-row";
+  totalRow.insertCell().textContent = "합계";
+  const totalCell = totalRow.insertCell();
+  totalCell.className = "num";
+  totalCell.textContent = String(t.total);
+  const pctCell = totalRow.insertCell();
+  pctCell.className = "num";
+  pctCell.textContent = "100%";
+  host.appendChild(table);
 }
 
 /** 평형별 층당세대수 합이 바뀌어 unitsPerFloor가 파생 갱신됐을 때 카드의 '층당세대' 입력값만 갱신 */
