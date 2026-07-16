@@ -1,3 +1,4 @@
+import { registerSW } from "virtual:pwa-register";
 import * as THREE from "three";
 import {
   applyRecenterOffset,
@@ -96,6 +97,9 @@ import {
   setStatus,
   type BuildingStatus,
 } from "./ui";
+
+// PWA 서비스워커 등록 (빌드에서만 활성 — dev에서는 no-op)
+registerSW({ immediate: true });
 
 const project: Project = defaultProject();
 const viewer = new Viewer(document.getElementById("viewport")!);

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f1929" />
+    <title>ArchView — 오프라인</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+        background: #070d1a;
+        color: #cbd5e1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+      .box {
+        max-width: 360px;
+        padding: 32px;
+      }
+      img {
+        width: 72px;
+        height: 72px;
+        border-radius: 16px;
+        margin-bottom: 18px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 10px;
+        color: #e0921a;
+      }
+      p {
+        font-size: 13px;
+        line-height: 1.7;
+        color: #94a3b8;
+        margin: 0 0 20px;
+      }
+      button {
+        background: #e0921a;
+        color: #0d1525;
+        border: none;
+        border-radius: 6px;
+        padding: 8px 20px;
+        font-size: 14px;
+        font-weight: 600;
+        font-family: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #f0a52e;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <img src="/icon-192.png" alt="ArchView" />
+      <h1>오프라인 상태입니다</h1>
+      <p>
+        네트워크에 연결되어 있지 않고, 아직 캐시된 앱이 없습니다.<br />
+        연결을 확인한 뒤 다시 시도하세요.
+      </p>
+      <button onclick="location.reload()">다시 시도</button>
+    </div>
+  </body>
+</html>
