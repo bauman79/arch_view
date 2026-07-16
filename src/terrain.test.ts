@@ -304,3 +304,47 @@ describe("clipTriangles — 대지경계 클리핑", () => {
     }
   });
 });
+
+describe("data/sample_terrain.dxf — 배포 샘플 엔드투엔드", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const text = readFileSync(
+    join(__dirname, "..", "data", "sample_terrain.dxf"),
+    "utf-8",
+  );
+  const { buildings, contourPoints, warnings } = parseDxfBuildings(text, "auto");
+  const model = buildTerrainModel(contourPoints)!;
+
+  it("경고 없이 파싱 — 계획주동 2동(창면 각 1개) + 등고선 6가닥", () => {
+    expect(warnings).toHaveLength(0);
+    expect(buildings.map((b) => b.name).sort()).toEqual([
+      "계획주동_A_1",
+      "계획주동_A_2",
+    ]);
+    for (const b of buildings) expect(b.windowSegments).toHaveLength(1);
+    // 등고선 6가닥 × 23점 (x: -110~110, 10m 간격)
+    expect(contourPoints).toHaveLength(6 * 23);
+  });
+
+  it("TIN 고도 범위 0m ~ 25m — 접미사(CONTOUR_0~20)·elevation 38(25m) 모두 인식", () => {
+    expect(model.minZ).toBe(0);
+    expect(model.maxZ).toBe(25);
+  });
+
+  it("건물 G.L. — 남측 A_1은 저지대(≈5m), 북측 A_2는 고지대(≈18m)", () => {
+    const byName = new Map(buildings.map((b) => [b.name, b]));
+    const gl1 = terrainElevationForFootprint(
+      model,
+      byName.get("계획주동_A_1")!.footprint,
+    );
+    const gl2 = terrainElevationForFootprint(
+      model,
+      byName.get("계획주동_A_2")!.footprint,
+    );
+    expect(gl1).toBeGreaterThan(3);
+    expect(gl1).toBeLessThan(9);
+    expect(gl2).toBeGreaterThan(15);
+    expect(gl2).toBeLessThan(21);
+    expect(gl2 - gl1).toBeGreaterThan(8);
+  });
+});
