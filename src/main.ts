@@ -165,6 +165,10 @@ function rebuildTerrain(): void {
     applyTerrainVisibility();
     viewer.terrainRoot.add(terrainGroup);
   }
+  terrainSummary.textContent = terrainModel
+    ? `등고선 점 ${terrainModel.points.length}개 · 삼각형 ${terrainModel.triangles.length / 3}개 · ` +
+      `고도 범위 ${terrainModel.minZ.toFixed(1)}m ~ ${terrainModel.maxZ.toFixed(1)}m`
+    : "지형 없음 — CONTOUR 레이어가 있는 DXF를 불러오면 표시됩니다.";
 }
 
 /** 지형 표시·와이어프레임 토글 상태를 메시에 반영 + 대지 회색 채움과의 교대 표시 */
@@ -190,6 +194,21 @@ function refreshTerrainElevation(b: Building): void {
     ? terrainElevationForFootprint(terrainModel, worldFootprint(b))
     : 0;
 }
+
+const terrainVisibleInput = document.getElementById("terrain-visible") as HTMLInputElement;
+const terrainWireInput = document.getElementById("terrain-wireframe") as HTMLInputElement;
+const terrainSummary = document.getElementById("terrain-summary")!;
+terrainSummary.textContent = "지형 없음 — CONTOUR 레이어가 있는 DXF를 불러오면 표시됩니다.";
+
+terrainVisibleInput.addEventListener("change", () => {
+  terrainVisible = terrainVisibleInput.checked;
+  applyTerrainVisibility();
+});
+
+terrainWireInput.addEventListener("change", () => {
+  terrainWireframe = terrainWireInput.checked;
+  applyTerrainVisibility();
+});
 
 // ---------- 건물 씬 구성 ----------
 

@@ -1317,6 +1317,28 @@
               <div id="sunhoursmap-summary"></div>
             </details>
 
+            <details id="terrain-section">
+              <summary>지형 (M7)</summary>
+              <p class="hint">
+                DXF <code>CONTOUR</code> 레이어 등고선으로 TIN 지형을 표시하고 건물을
+                지반고(G.L.)에 얹습니다. 시각화 전용 — 정북·채광·인동 검토는 지형과
+                무관하게 동일 레벨 기준. 규약은 툴바 "레이어 규약" 참고.
+              </p>
+              <div class="row">
+                <label>
+                  <input type="checkbox" id="terrain-visible" checked />
+                  지형 표시
+                </label>
+              </div>
+              <div class="row">
+                <label>
+                  <input type="checkbox" id="terrain-wireframe" />
+                  와이어프레임 (TIN 삼각망)
+                </label>
+              </div>
+              <div id="terrain-summary" class="hint"></div>
+            </details>
+
             <details>
               <summary>세대수·사업성</summary>
               <div class="row">
