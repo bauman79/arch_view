@@ -186,12 +186,15 @@ export function createBuildingObject(b: Building): THREE.Group {
       const winGeom = new THREE.PlaneGeometry(len, wallH);
       const winMesh = new THREE.Mesh(winGeom, winMat);
       winMesh.name = "window-hilite";
-      const basis = new THREE.Matrix4().makeBasis(
-        new THREE.Vector3(ex, 0, -ey).normalize(), // 로컬 X = 에지 진행방향
-        new THREE.Vector3(0, 1, 0), // 로컬 Y = 연직 상향
-        new THREE.Vector3(nx, 0, -ny).normalize(), // 로컬 Z = 바깥 법선(면이 바라보는 방향)
+      // 로컬 Z = 바깥 법선, X는 Y×Z로 유도 — 에지 진행방향을 X로 직접 쓰면 CW(미러된
+      // DXF 폴리라인) footprint에서 basis가 왼손좌표(det=-1, 반사)가 되고,
+      // setFromRotationMatrix는 순수 회전을 전제하므로 평면이 벽에서 떨어져 렌더된다.
+      const zAxis = new THREE.Vector3(nx, 0, -ny).normalize();
+      const yAxis = new THREE.Vector3(0, 1, 0);
+      const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis);
+      winMesh.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis),
       );
-      winMesh.quaternion.setFromRotationMatrix(basis);
       const mx = (p1.x + p2.x) / 2 - centroid.x;
       const my = (p1.y + p2.y) / 2 - centroid.y;
       winMesh.position.set(mx, piloti + wallH / 2, -my).addScaledVector(
