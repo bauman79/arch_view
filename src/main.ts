@@ -419,8 +419,8 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
       `— "건물 라이브러리"에서 장면에 추가하세요`;
     if (overlays.length > 0) msg += `, 오버레이 ${overlays.length}개`;
     if (winCount > 0) msg += `, 창면 ${winCount}개`;
-    if (warnings.length > 0) msg += ` (경고 ${warnings.length}건)`;
-    setStatus(msg);
+    if (warnings.length > 0) msg += ` (경고 ${warnings.length}건 — 마우스를 올리면 내용 표시)`;
+    setStatus(msg, warnings.length > 0 ? warnings.join("\n\n") : undefined);
     for (const w of warnings) console.warn("[DXF]", w);
   } catch (err) {
     setStatus(`불러오기 실패: ${(err as Error).message}`);
@@ -890,9 +890,24 @@ function setToggle(btn: HTMLElement, on: boolean): void {
   btn.classList.toggle("toggled", on);
 }
 
+/**
+ * 채광사선·인동거리는 **계획주동만** 검토 대상이다(daylight.ts / spacing.ts).
+ * DXF를 불러오면 계획주동은 라이브러리에만 담기고 장면에는 인접건물만 배치되므로,
+ * 계획주동을 추가하기 전에 토글을 켜면 "켬"이라 해놓고 아무것도 안 그려져 고장처럼 보인다.
+ * → 켜기 전에 대상 유무를 확인하고, 없으면 무엇을 해야 하는지 알려준다.
+ */
+function noPlanTargetMessage(what: string): string | null {
+  if (project.buildings.some((b) => b.type === "계획주동")) return null;
+  return project.buildings.length === 0
+    ? "먼저 DXF를 불러오세요."
+    : `장면에 계획주동이 없어 ${what} 검토를 켤 수 없습니다 — 계획주동만 검토하는 기능입니다. ` +
+        `"건물 라이브러리"에서 주동을 선택해 "장면에 추가"하세요.`;
+}
+
 daylightBtn.addEventListener("click", () => {
-  if (!daylightOn && project.buildings.length === 0) {
-    setStatus("먼저 DXF를 불러오세요.");
+  const blocked = !daylightOn && noPlanTargetMessage("채광사선");
+  if (blocked) {
+    setStatus(blocked);
     return;
   }
   daylightOn = !daylightOn;
@@ -907,8 +922,9 @@ daylightBtn.addEventListener("click", () => {
 });
 
 spacingBtn.addEventListener("click", () => {
-  if (!spacingOn && project.buildings.length === 0) {
-    setStatus("먼저 DXF를 불러오세요.");
+  const blocked = !spacingOn && noPlanTargetMessage("인동거리");
+  if (blocked) {
+    setStatus(blocked);
     return;
   }
   spacingOn = !spacingOn;

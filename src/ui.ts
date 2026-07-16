@@ -57,9 +57,18 @@ export function emptyBuildingStatus(): BuildingStatus {
   return { m2: "na", m3d: "na", m3s: "na", sh: "na" };
 }
 
-export function setStatus(msg: string): void {
+/**
+ * 상태바 메시지 갱신.
+ * @param detail 있으면 툴팁(title)으로 붙는다 — DXF 경고처럼 한 줄에 다 못 넣는 상세 내용용.
+ *   (console.warn만으로는 DevTools를 열지 않는 사용자에게 전달되지 않는다)
+ */
+export function setStatus(msg: string, detail?: string): void {
   const el = document.getElementById("statusbar");
-  if (el) el.textContent = msg;
+  if (el) {
+    el.textContent = msg;
+    if (detail) el.setAttribute("title", detail);
+    else el.removeAttribute("title");
+  }
   // "… 42%" 형태의 진행 메시지면 캔버스 상단 앰버 진행바를 함께 갱신
   const bar = document.getElementById("progress-bar");
   if (bar) {

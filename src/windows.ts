@@ -7,30 +7,46 @@ import type { Point2 } from "./types";
  */
 export const WINDOW_MATCH_TOLERANCE = 0.1;
 
-function closeEnough(a: Point2, b: Point2, tol: number): boolean {
-  return Math.hypot(a.x - b.x, a.y - b.y) <= tol;
-}
-
-/** 두 선분이 (끝점 순서 무관) 허용오차 내에서 같은 위치인지 */
-export function segmentsCoincide(
-  a1: Point2,
-  a2: Point2,
-  b1: Point2,
-  b2: Point2,
+/**
+ * 창선(wa→wb)이 벽면(a→b) **위에 겹쳐 놓여 있는지**.
+ * 벽 전체를 덮지 않고 일부 구간만 덮어도 참 — 실무 도면은 창을 벽 일부에만 그리는 일이
+ * 흔하고, 법 판정 단위는 어차피 "벽면 1개"이기 때문이다(가/라/마목, 채광사선 모두 벽 단위).
+ * 판정 조건:
+ *  1. 창선 양 끝점이 벽 **직선에서** tol 이내 (다른 벽·평행한 반대편 벽 배제)
+ *  2. 벽 구간과 실제로 겹치는 길이가 tol 초과 (모서리만 스치는 경우 배제)
+ */
+export function segmentLiesOnEdge(
+  a: Point2,
+  b: Point2,
+  wa: Point2,
+  wb: Point2,
   tol: number = WINDOW_MATCH_TOLERANCE,
 ): boolean {
-  return (
-    (closeEnough(a1, b1, tol) && closeEnough(a2, b2, tol)) ||
-    (closeEnough(a1, b2, tol) && closeEnough(a2, b1, tol))
-  );
+  const ex = b.x - a.x;
+  const ey = b.y - a.y;
+  const len2 = ex * ex + ey * ey;
+  if (len2 < 1e-12) return false;
+  const len = Math.sqrt(len2);
+
+  // 벽 직선에 투영 — t=0이 a, t=1이 b
+  const ta = ((wa.x - a.x) * ex + (wa.y - a.y) * ey) / len2;
+  const tb = ((wb.x - a.x) * ex + (wb.y - a.y) * ey) / len2;
+  const perpA = Math.hypot(wa.x - (a.x + ex * ta), wa.y - (a.y + ey * ta));
+  const perpB = Math.hypot(wb.x - (a.x + ex * tb), wb.y - (a.y + ey * tb));
+  if (perpA > tol || perpB > tol) return false;
+
+  // 벽 구간 [0,1]과 창선 구간의 겹침 길이
+  const lo = Math.max(0, Math.min(ta, tb));
+  const hi = Math.min(1, Math.max(ta, tb));
+  return (hi - lo) * len > tol;
 }
 
-/** footprint 에지(a→b)가 windowSegments 중 하나와 일치하면 창이 있는 벽 */
+/** footprint 에지(a→b) 위에 창선이 하나라도 놓여 있으면 창이 있는 벽 */
 export function edgeHasWindow(
   a: Point2,
   b: Point2,
   windowSegments: [Point2, Point2][],
   tol: number = WINDOW_MATCH_TOLERANCE,
 ): boolean {
-  return windowSegments.some(([wa, wb]) => segmentsCoincide(a, b, wa, wb, tol));
+  return windowSegments.some(([wa, wb]) => segmentLiesOnEdge(a, b, wa, wb, tol));
 }

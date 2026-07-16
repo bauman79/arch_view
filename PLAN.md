@@ -215,7 +215,7 @@ Project
 - 건물 레이어만 Building으로 변환 — 나머지는 압출·인터랙션 없는
   참고용 2D 오버레이(`Project.siteOverlays`)로 분리
 - 각 건물 외곽선은 **닫힌 폴리라인(LWPOLYLINE, closed)** 1개
-- `PLAN_WIN`은 좌표 일치(허용오차 0.1m)로 footprint 에지에 매칭되어
+- `PLAN_WIN`은 footprint 에지 **위에 놓였는지**(허용오차 0.1m, 벽 일부만 덮어도 인정)로 매칭되어
   `Building.windowSegments`에 저장 — 채광사선은 PLAN_WIN 창면만 검토, 인동거리는 마주보는
   벽의 창 유무로 가/라/마목 분류 (데이터 없으면 하위호환으로 "창 있음" 가정)
 - 등고선은 폴리라인 + 표고값(elevation 속성 또는 레이어명/텍스트로 지정, M7)

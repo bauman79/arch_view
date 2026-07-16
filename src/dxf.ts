@@ -1,7 +1,8 @@
 import DxfParser from "dxf-parser";
 import { FixedLwpolylineParser } from "./dxf-lwpolyline";
+import { signedArea } from "./geom2d";
 import { defaultUnitMix } from "./massing";
-import { segmentsCoincide, WINDOW_MATCH_TOLERANCE } from "./windows";
+import { segmentLiesOnEdge, WINDOW_MATCH_TOLERANCE } from "./windows";
 import type { Building, BuildingType, OverlayLayer, OverlayLine, Point2 } from "./types";
 
 // data/DXF_RULES.md DXF 레이어 규약
@@ -98,6 +99,22 @@ function matchBuildingLayer(layer: string): BuildingLayerMatch | null {
     };
   }
   return null;
+}
+
+/**
+ * footprint 형상 시그니처 — 회전·이동·**미러에 불변**(변 길이 다중집합 + 면적).
+ * 같은 타입 레이어에 서로 다른 형상의 주동이 섞여 그려졌는지 찾는 용도.
+ * 미러 복사본은 같은 타입으로 봐야 하므로 winding(부호)은 쓰지 않고 면적 절댓값만 쓴다.
+ */
+function shapeSignature(pts: Point2[]): string {
+  const lens = pts
+    .map((p, i) => {
+      const q = pts[(i + 1) % pts.length];
+      return Math.hypot(q.x - p.x, q.y - p.y);
+    })
+    .map((v) => v.toFixed(2))
+    .sort();
+  return `${Math.abs(signedArea(pts)).toFixed(1)}|${lens.join(",")}`;
 }
 
 /**
@@ -281,6 +298,8 @@ export function parseDxfBuildings(
   ).length;
   /** 같은 레이어(같은 타입태그)에 폴리라인이 여러 개면 이름 뒤에 -2, -3… 을 붙여 구분 */
   const nameCount = new Map<string, number>();
+  /** 타입 레이어(PLAN_A_1 등)별 형상 목록 — 서로 다른 타입이 한 레이어에 섞였는지 검사용 */
+  const shapesByTypeLayer = new Map<string, { name: string; sig: string; area: number }[]>();
   for (const pl of polylines) {
     const m = matchBuildingLayer(pl.layer)!;
     const isPlan = m.isPlan;
@@ -298,6 +317,17 @@ export function parseDxfBuildings(
       name = isPlan
         ? `계획주동${++planCount > 1 || planTotal > 1 ? " " + planCount : ""}`
         : `인접건물 ${String.fromCharCode(64 + ++adjCount)}`; // A, B, C...
+    }
+    // 타입 문자(A/B/…)는 "같은 타입 주동"을 뜻하므로 한 레이어의 형상은 모두 합동이어야 한다.
+    // 구버전 PLAN_BLDG/ADJ_BLDG는 타입 구분이 없는 범용 레이어라 검사 대상이 아니다.
+    if (m.typeTag !== null) {
+      const list = shapesByTypeLayer.get(pl.layer) ?? [];
+      list.push({
+        name,
+        sig: shapeSignature(pl.vertices),
+        area: Math.abs(signedArea(pl.vertices)),
+      });
+      shapesByTypeLayer.set(pl.layer, list);
     }
     buildings.push({
       id: `bldg-${buildings.length + 1}`,
@@ -321,7 +351,34 @@ export function parseDxfBuildings(
     });
   }
 
-  // PLAN_WIN/ADJ_WIN 선분을 footprint 에지와 좌표 일치(허용오차 0.1m)로 매칭.
+  // 한 타입 레이어에 형상이 여러 종이면 안내 — 판정은 동별 실제 기하로 하므로 계산에는
+  // 영향이 없지만, 목록에서 이름(…-5, …-6)만으로는 어느 동이 다른 형상인지 알 수 없어
+  // "같은 타입을 복사·미러한 것"으로 오인하기 쉽다.
+  for (const [layer, list] of shapesByTypeLayer) {
+    const groups = new Map<string, { names: string[]; area: number }>();
+    for (const s of list) {
+      const g = groups.get(s.sig) ?? { names: [], area: s.area };
+      g.names.push(s.name);
+      groups.set(s.sig, g);
+    }
+    if (groups.size <= 1) continue;
+    const desc = [...groups.values()]
+      .sort((a, b) => b.names.length - a.names.length)
+      .map((g) => {
+        // 다수 그룹은 동수만, 소수(어긋난 쪽) 그룹은 이름까지 — 어느 동을 볼지 바로 알 수 있게
+        const who = g.names.length <= 2 ? ` — ${g.names.join(", ")}` : "";
+        return `${g.area.toFixed(1)}㎡ ${g.names.length}동${who}`;
+      })
+      .join(" / ");
+    warnings.push(
+      `${layer} 레이어에 서로 다른 형상 ${groups.size}종이 섞여 있습니다 (${desc}). ` +
+        `타입 문자가 같으면 같은 타입 주동을 뜻합니다 — 다른 타입이면 PLAN_B_1 처럼 레이어를 ` +
+        `나눠 그리면 목록에서 구분됩니다. 사선·인동·세대수 판정은 동별 실제 형상으로 하므로 영향 없습니다.`,
+    );
+  }
+
+  // PLAN_WIN/ADJ_WIN 선분을 footprint 에지 **위에 놓였는지**(허용오차 0.1m)로 매칭.
+  // 벽 전체를 덮지 않는 부분 창선도 그 벽의 창으로 인정한다(windows.ts segmentLiesOnEdge).
   // 후보 선분 기준으로 순회해 여러 건물에 걸쳐 검색 — 다른 건물에 이미 매칭된 선분을
   // "미매칭"으로 잘못 세지 않도록 건물 기준이 아닌 선분 기준으로 루프를 돈다.
   let unmatchedWin = 0;
@@ -336,7 +393,7 @@ export function parseDxfBuildings(
         for (let i = 0; i < n; i++) {
           const p1 = b.footprint[i];
           const p2 = b.footprint[(i + 1) % n];
-          if (segmentsCoincide(p1, p2, wa, wb, WINDOW_MATCH_TOLERANCE)) {
+          if (segmentLiesOnEdge(p1, p2, wa, wb, WINDOW_MATCH_TOLERANCE)) {
             b.windowSegments.push([wa, wb]);
             matched = true;
             break;
@@ -351,8 +408,8 @@ export function parseDxfBuildings(
   matchWinLayer(adjWinSegments, false);
   if (unmatchedWin > 0) {
     warnings.push(
-      `${LAYER_PLAN_WIN}/${LAYER_ADJ_WIN} 선분 ${unmatchedWin}개가 어떤 건물 외곽선과도 ` +
-        `일치하지 않아 무시됨 (허용오차 ${WINDOW_MATCH_TOLERANCE}m — 좌표를 정확히 맞춰 그려주세요)`,
+      `${LAYER_PLAN_WIN}/${LAYER_ADJ_WIN} 선분 ${unmatchedWin}개가 어떤 건물 외곽선 위에도 ` +
+        `놓여있지 않아 무시됨 (허용오차 ${WINDOW_MATCH_TOLERANCE}m — 창선을 벽면에 스냅해 그려주세요)`,
     );
   }
 

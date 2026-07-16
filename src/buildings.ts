@@ -22,13 +22,30 @@ const OVERLAY_COLOR: Record<OverlayLine["layer"], number> = {
 };
 
 /**
+ * 대지(SITE_BOUNDARY) 내부 바닥 채움 — 씬 배경(0x070d1a)보다 충분히 밝은 중간 회색이라야
+ * 그림자(그림자 영역은 반구광만 받아 어두워짐)가 대비로 드러난다.
+ */
+const SITE_FILL_COLOR = 0x7a828c;
+/**
+ * 대지 채움 높이 — 격자(0) 위, 오버레이 선(0.05) 아래.
+ * 지면판(-0.05)과의 간격 0.07m는 카메라 near=0.1·far=5000에서 원거리(수백 m) 깊이
+ * 분해능(≈0.05m)에 근접해 z-fighting이 나므로, 높이차만 믿지 않고 polygonOffset을 함께 쓴다.
+ */
+const SITE_FILL_Y = 0.02;
+
+/**
  * SITE_BOUNDARY 등 참고용 2D 오버레이 선(대지경계·인접대지·도로중심선·공원경계) 렌더링.
  * z=0(지면) 바로 위에 얇게 표시 — 건물처럼 압출·인터랙션하지 않는다.
+ * 닫힌 SITE_BOUNDARY는 내부를 회색 면으로 채워 그림자 확인용 바닥으로 쓴다.
  */
 export function createOverlayGroup(overlays: OverlayLine[]): THREE.Group {
   const group = new THREE.Group();
   const y = 0.05;
   for (const o of overlays) {
+    if (o.layer === "SITE_BOUNDARY") {
+      const fill = createSiteFill(o);
+      if (fill) group.add(fill);
+    }
     const pts = o.points.map((p) => new THREE.Vector3(p.x, y, -p.y));
     if (o.closed) pts.push(pts[0].clone());
     const geom = new THREE.BufferGeometry().setFromPoints(pts);
@@ -38,6 +55,41 @@ export function createOverlayGroup(overlays: OverlayLine[]): THREE.Group {
     group.add(line);
   }
   return group;
+}
+
+/**
+ * 대지경계 폴리곤 내부를 채우는 회색 면. 그림자를 받도록 receiveShadow.
+ * SITE_BOUNDARY는 규약상 닫힌 폴리라인이지만, 열려 있어도 닫힌 것으로 보고 채운다
+ * (DXF 파싱 단계에서 이미 "닫힌 것으로 간주" 경고를 내보내므로 여기서 또 막지 않는다).
+ */
+function createSiteFill(o: OverlayLine): THREE.Mesh | null {
+  if (o.points.length < 3) return null;
+  const shape = new THREE.Shape();
+  o.points.forEach((p, i) => {
+    if (i === 0) shape.moveTo(p.x, p.y);
+    else shape.lineTo(p.x, p.y);
+  });
+  shape.closePath();
+
+  // ShapeGeometry는 XY평면에 법선 +Z로 생성 — rotateX(-90°)로 (x,y)→(x,0,-y), 법선은 +Y(상향).
+  // 폴리곤 winding과 무관하게 법선이 위를 보므로 DoubleSide로 둬도 조명이 뒤집히지 않는다.
+  const geom = new THREE.ShapeGeometry(shape);
+  geom.rotateX(-Math.PI / 2);
+  const mesh = new THREE.Mesh(
+    geom,
+    new THREE.MeshLambertMaterial({
+      color: SITE_FILL_COLOR,
+      side: THREE.DoubleSide,
+      // 아래 지면판과 깊이가 근접해 얼룩(z-fighting)이 생기는 것을 막는다 — 항상 지면판 위로
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
+    }),
+  );
+  mesh.position.y = SITE_FILL_Y;
+  mesh.receiveShadow = true;
+  mesh.name = "site-fill";
+  return mesh;
 }
 
 /** 필로티 개방부 높이 (m) */

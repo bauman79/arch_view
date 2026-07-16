@@ -141,6 +141,74 @@ describe("PLAN_<타입>_<번호> 권장 규약", () => {
   });
 });
 
+/**
+ * 타입 레이어(PLAN_A_1 등)는 "같은 타입 주동"을 뜻하므로 형상이 모두 합동이어야 한다.
+ * 섞여 있으면 이름(…-5, …-6)만으로 구분이 안 돼 "복사·미러본"으로 오인하기 쉬워 안내한다.
+ * 판정에는 영향이 없으므로 경고만 — 건물은 그대로 다 불러온다.
+ */
+describe("한 타입 레이어에 다른 형상 혼재 감지", () => {
+  /** 임의 꼭짓점 폴리라인 (닫힘) */
+  function polyEntity(layer: string, pts: [number, number][]): string {
+    const head = `0\nLWPOLYLINE\n8\n${layer}\n90\n${pts.length}\n70\n1\n`;
+    return head + pts.map(([x, y]) => `10\n${x}\n20\n${y}\n`).join("");
+  }
+  // 비대칭 L자 — 미러하면 좌표는 달라지지만 형상은 합동
+  const L: [number, number][] = [
+    [0, 0],
+    [20000, 0],
+    [20000, 6000],
+    [8000, 6000],
+    [8000, 15000],
+    [0, 15000],
+  ];
+  const mirroredL = L.map(([x, y]) => [-x, y] as [number, number]);
+
+  it("합동인 형상만 있으면 경고 없음", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 10000, 10000) +
+        rectEntity("PLAN_A_1", 20000, 0, 30000, 10000),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.warnings.filter((w) => w.includes("다른 형상"))).toHaveLength(0);
+  });
+
+  it("미러 복사본은 같은 타입으로 보아 경고 없음", () => {
+    const text = dxfText({
+      entities: polyEntity("PLAN_A_1", L) + polyEntity("PLAN_A_1", mirroredL),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings).toHaveLength(2);
+    expect(r.warnings.filter((w) => w.includes("다른 형상"))).toHaveLength(0);
+  });
+
+  it("형상이 다르면 경고하고, 어긋난 동 이름을 짚어준다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 20000, 20000) + // 400㎡
+        rectEntity("PLAN_A_1", 40000, 0, 60000, 20000) + // 400㎡ (합동)
+        rectEntity("PLAN_A_1", 80000, 0, 90000, 10000), // 100㎡ (다름)
+    });
+    const r = parseDxfBuildings(text, "mm");
+    const w = r.warnings.find((x) => x.includes("다른 형상"));
+    expect(w).toBeDefined();
+    expect(w).toContain("PLAN_A_1");
+    expect(w).toContain("서로 다른 형상 2종");
+    expect(w).toContain("계획주동_A_1-3"); // 어긋난 1동만 이름 표기
+    expect(r.buildings).toHaveLength(3); // 경고일 뿐 — 전부 정상 로드
+  });
+
+  it("타입 구분이 없는 구버전 PLAN_BLDG는 형상이 달라도 경고하지 않는다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_BLDG_15F", 0, 0, 20000, 20000) +
+        rectEntity("PLAN_BLDG_15F", 40000, 0, 50000, 10000),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.warnings.filter((w) => w.includes("다른 형상"))).toHaveLength(0);
+  });
+});
+
 describe("사이트 오버레이 전용 파일 허용", () => {
   it("건물 레이어 없이 SITE_BOUNDARY만 있어도 에러 없이 로드된다", () => {
     const text = dxfText({
