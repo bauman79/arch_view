@@ -148,9 +148,11 @@
       <td>3D 하이라이트 표시 용도</td>
     </tr>
     <tr>
-      <td><code>CONTOUR</code></td>
-      <td>등고선 (M7 지형용)</td><td>LWPOLYLINE</td>
-      <td>표고는 정점 Z값 또는 <code>ELEV</code> 속성</td>
+      <td><code>CONTOUR(_&lt;고도 m&gt;)</code></td>
+      <td>등고선 (M7 지형용)</td><td>LWPOLYLINE·POLYLINE·LINE</td>
+      <td>고도는 정점 Z값(또는 elevation 38) 우선, 0이면 레이어명 접미사
+        (<code>CONTOUR_10</code> = 10m). 상세는
+        <a href="/CONTOUR_RULES.html">CONTOUR 등고선 규약</a> 참고</td>
     </tr>
   </table>
   </div>

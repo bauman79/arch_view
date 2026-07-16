@@ -34,7 +34,7 @@ arch_view가 대지·인접대지·주동·인접건물·창면을 자동으로 
 | `PARK_BOUNDARY` | 공원 등 경계 | LWPOLYLINE | 색상 3(초록) 권장. 채광사선 기준선(도로와 동일 취급) |
 | `PLAN_WIN` | 계획주동 창 있는 벽면 표시 | LINE 또는 LWPOLYLINE | 해당 벽면의 주동 footprint 에지 **위에** 그림(벽 일부만 덮어도 됨). 색상 6(자홍) 권장 |
 | `ADJ_WIN` | 인접건물 창 있는 벽면 표시 | LINE 또는 LWPOLYLINE | 3D 하이라이트 표시 용도 |
-| `CONTOUR` | 등고선 (M7 지형용) | LWPOLYLINE | 표고는 정점의 Z값 또는 `ELEV` 속성으로 지정 |
+| `CONTOUR(_<고도 m>)` | 등고선 (M7 지형용) | LWPOLYLINE·POLYLINE·LINE | 고도는 정점 Z값(또는 elevation 38) 우선, 0이면 레이어명 접미사(`CONTOUR_10` = 10m). 상세는 `data/CONTOUR_RULES.md` 참고 |
 
 - 같은 레이어에 주동/건물이 여러 개 있어도 됩니다 — 폴리라인마다 별도 건물로
   인식하며, `PLAN_A_1` 레이어에 폴리라인이 2개면 `계획주동_A_1`, `계획주동_A_1-2`로
