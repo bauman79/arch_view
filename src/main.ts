@@ -19,8 +19,10 @@ import {
 } from "./buildings";
 import {
   buildTerrainModel,
+  contourLevels,
   createTerrainGroup,
   nearestPointElevation,
+  quantizeToLevel,
   sampleElevation,
   terrainElevationForFootprint,
   type TerrainModel,
@@ -155,6 +157,8 @@ let sceneSeq = 0;
 
 /** 현재 로드된 지형 TIN — null이면 평지 모드 (기존 동작 그대로) */
 let terrainModel: TerrainModel | null = null;
+/** 등고 레벨 목록 (오름차순) — 계단식 G.L. 스냅용, rebuildTerrain에서 채움 */
+let terrainLevels: number[] | null = null;
 let terrainGroup: THREE.Group | null = null;
 let terrainVisible = true;
 let terrainWireframe = false;
@@ -179,6 +183,7 @@ function rebuildTerrain(): void {
     terrainGroup = null;
   }
   terrainModel = buildTerrainModel(project.terrainPoints);
+  terrainLevels = terrainModel ? contourLevels(terrainModel) : null;
   if (terrainModel) {
     terrainGroup = createTerrainGroup(terrainModel, siteClipPolygon());
     applyTerrainVisibility();
@@ -231,12 +236,18 @@ function terrainSampler(): ((x: number, y: number) => number) | undefined {
 
 /**
  * 건물 G.L.(terrainElevation) 재계산 — offset 반영된 월드 footprint 꼭짓점 고도 평균.
- * 지형이 없으면 0. 렌더 위치(applyOffset)의 y로만 쓰이고 법적 검토에는 미반영(M7 방침).
+ * 계단식 표시 중엔 그 평균을 등고 단 레벨로 내림 스냅해 주동이 단 위에 앉는다
+ * (계획 G.L. — 계단식 성절토 가정). 지형이 없으면 0.
+ * 렌더 위치(applyOffset)의 y로만 쓰이고 법적 검토에는 미반영(M7 방침).
  */
 function refreshTerrainElevation(b: Building): void {
-  b.terrainElevation = terrainModel
-    ? terrainElevationForFootprint(terrainModel, worldFootprint(b))
-    : 0;
+  if (!terrainModel) {
+    b.terrainElevation = 0;
+    return;
+  }
+  const e = terrainElevationForFootprint(terrainModel, worldFootprint(b));
+  b.terrainElevation =
+    terrainStepped && terrainLevels ? quantizeToLevel(terrainLevels, e) : e;
 }
 
 const terrainVisibleInput = document.getElementById("terrain-visible") as HTMLInputElement;
@@ -260,6 +271,19 @@ const terrainSteppedInput = document.getElementById(
 terrainSteppedInput.addEventListener("change", () => {
   terrainStepped = terrainSteppedInput.checked;
   applyTerrainVisibility();
+  // 주동 G.L.을 표시 모드에 맞춰 재계산 — 계단식이면 단 레벨 스냅, 끄면 TIN 보간 복귀
+  for (const b of project.buildings) {
+    refreshTerrainElevation(b);
+    const g = groups.get(b.id);
+    if (g) applyOffset(g, b);
+  }
+  if (terrainModel) {
+    setStatus(
+      terrainStepped
+        ? "계단식 표시 켬 — 주동 지반고(G.L.)를 등고 단 레벨로 스냅했습니다 (법적 검토는 동일 레벨 기준 그대로)"
+        : "계단식 표시 끔 — 주동 지반고(G.L.)를 TIN 보간 고도로 되돌렸습니다",
+    );
+  }
 });
 
 // ---------- 건물 씬 구성 ----------
