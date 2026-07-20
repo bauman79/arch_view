@@ -541,11 +541,19 @@
         overflow-y: auto;
       }
 
-      /* 세대수 요약 패널 */
-      #unit-summary {
+      /* 세대수 요약 패널 (LBM 결과 패널도 동일 스타일) */
+      #unit-summary,
+      #lbm-result {
         padding: 12px;
         border-bottom: 1px solid #e2e8f0;
         background: #ffffff;
+      }
+
+      /* 좌측 패널 섹션 내부 소구분선 — M8 바람길 ↔ M10 LBM */
+      .subsec-divider {
+        border: 0;
+        border-top: 1px solid #d5dce6;
+        margin: 12px 0 8px;
       }
 
       .unit-total {
@@ -1286,6 +1294,50 @@
                 빨강(&gt;2배) — 주풍속 대비 배율
               </p>
               <div id="wind-summary"></div>
+
+              <hr class="subsec-divider" />
+              <p class="hint">
+                <b>LBM 정밀 시뮬레이션 (M10)</b> — D2Q9 격자 볼츠만 2D 유동.
+                수렴(연속 10스텝 변화율 &lt;0.1%)하면 자동 정지. 위의 포텐셜 근사와
+                별개 모드이며, 수직 흐름·난류 상세는 범위 밖.
+              </p>
+              <div class="row">
+                <label for="lbm-dir-mode">풍향</label>
+                <select id="lbm-dir-mode">
+                  <option value="auto" selected>EPW 주풍향 (자동)</option>
+                  <option value="manual">수동 입력</option>
+                </select>
+              </div>
+              <div class="row" id="lbm-dir-manual-row" hidden>
+                <label for="lbm-dir-deg">풍향(도, 0=북)</label>
+                <input type="number" id="lbm-dir-deg" value="270" min="0" max="360" step="5" />
+              </div>
+              <div class="row">
+                <label for="lbm-speed">풍속(m/s)</label>
+                <input type="number" id="lbm-speed" value="3.1" min="0.5" max="30" step="0.1" />
+              </div>
+              <div class="row">
+                <label for="lbm-grid">격자 해상도</label>
+                <select id="lbm-grid">
+                  <option value="auto" selected>자동 (2~4m)</option>
+                  <option value="2">2m</option>
+                  <option value="4">4m</option>
+                  <option value="8">8m</option>
+                </select>
+              </div>
+              <div class="row">
+                <label><input type="checkbox" id="lbm-heatmap" checked /> 히트맵</label>
+                <label><input type="checkbox" id="lbm-streamlines" checked /> 유선</label>
+              </div>
+              <div class="row">
+                <button id="run-lbm" class="btn primary">LBM 정밀 시뮬레이션</button>
+                <button id="clear-lbm" class="btn mini">지우기</button>
+              </div>
+              <p class="hint">
+                히트맵: 파랑=정체 → 청록 → 노랑(≈주풍속) → 빨강(2배 이상) — U/U₀.
+                유선 색은 M8과 동일 규약. 풍향 자동은 위 기상데이터·기간 선택을 따름.
+              </p>
+              <div id="lbm-summary"></div>
             </details>
 
             <details id="sunhoursmap-section">
@@ -1385,6 +1437,10 @@
             <div id="unit-summary-body">
               <p class="hint">계획주동을 배치하면 전체·타입별 세대수가 표시됩니다.</p>
             </div>
+          </section>
+          <section id="lbm-result" hidden>
+            <div class="detail-sec-title">LBM 바람 분석 (M10)</div>
+            <div id="lbm-result-body"></div>
           </section>
           <div id="building-detail">
             <div class="detail-empty">

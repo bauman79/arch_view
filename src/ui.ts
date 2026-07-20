@@ -16,6 +16,7 @@ import type { SpacingResult } from "./spacing";
 import type { SunHoursBuildingSummary } from "./sunhours";
 import type { SunHoursMapResult } from "./sunhoursmap";
 import { windDirLabel, type WindResult } from "./wind";
+import type { LbmResult } from "./lbm";
 import { buildingHeight, mirrorLabel, type Building } from "./types";
 
 export interface UiCallbacks {
@@ -1136,6 +1137,57 @@ export function renderWindSummary(
     p.textContent = note;
     root.appendChild(p);
   }
+}
+
+/**
+ * M10 LBM 요약 — 좌측 패널 카드와 우측 "LBM 바람 분석" 패널을 함께 갱신.
+ * result가 null이면 둘 다 비우고 우측 패널을 숨긴다.
+ */
+export function renderLbmSummary(result: LbmResult | null, note?: string): void {
+  const root = document.getElementById("lbm-summary")!;
+  const section = document.getElementById("lbm-result") as HTMLElement;
+  const body = document.getElementById("lbm-result-body")!;
+  root.innerHTML = "";
+  if (!result) {
+    section.hidden = true;
+    body.innerHTML = "";
+    if (note) root.innerHTML = `<p class="hint">${note}</p>`;
+    return;
+  }
+  const dirLabel = `${windDirLabel(result.windDirDeg)} (${result.windDirDeg.toFixed(0)}°)`;
+  const convLabel = result.converged
+    ? `<b class="ok">수렴 완료 (${result.steps}스텝)</b>`
+    : `<b class="bad">미수렴 (${result.steps}스텝 중단)</b>`;
+  const gainPct = (result.maxRatio - 1) * 100;
+
+  const div = document.createElement("div");
+  div.className = "summary-card";
+  div.innerHTML =
+    `<div class="bname">풍향 ${dirLabel} · ${result.windSpeedMs.toFixed(1)} m/s</div>` +
+    `<div class="surf-line">${convLabel} · 격자 ${result.gridM}m (${result.domain.nx}×${result.domain.ny})</div>` +
+    `<div class="surf-line">최대 풍속 증가율(협곡효과): <b>${gainPct >= 0 ? "+" : ""}${gainPct.toFixed(0)}%</b></div>` +
+    `<div class="surf-line">바람 그늘(U&lt;0.5×U₀): <b class="${result.shadowAreaM2 > 0 ? "bad" : "ok"}">${result.shadowAreaM2.toFixed(0)}㎡</b></div>`;
+  root.appendChild(div);
+  if (note) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = note;
+    root.appendChild(p);
+  }
+
+  // 우측 패널 — 상세 결과
+  section.hidden = false;
+  body.innerHTML =
+    `<div class="surf-line">풍향: <b>${dirLabel}</b> (${result.windDirSource === "epw" ? "EPW 주풍향" : "수동 입력"})</div>` +
+    `<div class="surf-line">유입 풍속 U₀: <b>${result.windSpeedMs.toFixed(1)} m/s</b></div>` +
+    `<div class="surf-line">격자: ${result.gridM}m · ${result.domain.nx}×${result.domain.ny}셀</div>` +
+    `<div class="surf-line">${convLabel}</div>` +
+    `<div class="surf-line">최대 풍속 증가율: <b>${gainPct >= 0 ? "+" : ""}${gainPct.toFixed(1)}%</b> ` +
+    `(최대 ${(result.maxRatio * result.windSpeedMs).toFixed(1)} m/s)</div>` +
+    `<div class="surf-line">바람 그늘 면적(U&lt;0.5×U₀): ` +
+    `<b class="${result.shadowAreaM2 > 0 ? "bad" : "ok"}">${result.shadowAreaM2.toFixed(0)}㎡</b></div>` +
+    `<p class="hint">2D LBM(D2Q9) — 지붕 위 넘는 흐름·난류 상세는 미반영. ` +
+    `바람 그늘 기준(0.5×U₀)은 M8 바람그림자(0.3×U₀)와 다름.</p>`;
 }
 
 /** M9 일조시간 지도 요약 — 지면 평균·전체 통계·법적기준 참고 판정 */

@@ -74,6 +74,20 @@ import {
   type WindRoseData,
 } from "./wind";
 import {
+  assembleLbmResult,
+  buildLbmDomain,
+  chooseLbmGridM,
+  LBM_MAX_STEPS,
+  type LbmResult,
+} from "./lbm";
+import type {
+  LbmDoneMessage,
+  LbmProgressMessage,
+  LbmRunMessage,
+  LbmStopMessage,
+} from "./lbm.worker";
+import { createLbmHeatmap, type LbmHeatmap } from "./lbmvis";
+import {
   buildingHeight,
   defaultProject,
   mirrorLabel,
@@ -101,6 +115,7 @@ import {
   renderSunHoursMapSummary,
   renderSunHoursSummary,
   renderWindSummary,
+  renderLbmSummary,
   setStatus,
   type BuildingStatus,
 } from "./ui";
@@ -120,6 +135,7 @@ let pvRunning = false;
 let lastPvEnergy: PvEnergyResult | null = null;
 let pvEnergyRunning = false;
 let lastWind: WindResult | null = null;
+let lastLbm: LbmResult | null = null;
 let lastSunHoursMap: SunHoursMapResult | null = null;
 let sunHoursMapRunning = false;
 /** M3 상태 도트 계산용 — updateSetbackChecks()에서 채워짐 (renderSetbackSummary와 별개로 보관) */
@@ -707,6 +723,9 @@ function invalidateAnalysis(): void {
     clearWindOverlay();
     renderWindSummary(null, note);
   }
+  if (lastLbm || lbmWorker) {
+    resetLbm(note); // 실행 중이던 워커도 종료 — 이전 배치 기준 결과라 무효
+  }
   if (lastSunHoursMap) {
     lastSunHoursMap = null;
     clearSunHoursMapOverlay();
@@ -1214,6 +1233,171 @@ document.getElementById("clear-wind")!.addEventListener("click", () => {
   clearWindOverlay();
   renderWindSummary(null);
   setStatus("바람길 결과를 지웠습니다.");
+});
+
+// ---------- LBM 정밀 시뮬레이션 (M10) ----------
+// D2Q9 격자 볼츠만 — M8 포텐셜 근사와 별개 모드(둘 다 유지). 도메인은 메인에서
+// 만들고 WebWorker가 수렴까지 스텝을 돌리며, 25스텝마다 속도비를 transferable로
+// 받아 히트맵을 실시간 갱신한다. 유선은 M8 createWindOverlay를 재사용.
+
+let lbmWorker: Worker | null = null;
+let lbmHeatmap: LbmHeatmap | null = null;
+let lbmStreamGroup: THREE.Group | null = null;
+
+const lbmDirModeSelect = document.getElementById("lbm-dir-mode") as HTMLSelectElement;
+const lbmDirManualRow = document.getElementById("lbm-dir-manual-row") as HTMLElement;
+const lbmDirDegInput = document.getElementById("lbm-dir-deg") as HTMLInputElement;
+const lbmSpeedInput = document.getElementById("lbm-speed") as HTMLInputElement;
+const lbmGridSelect = document.getElementById("lbm-grid") as HTMLSelectElement;
+const lbmHeatmapChk = document.getElementById("lbm-heatmap") as HTMLInputElement;
+const lbmStreamChk = document.getElementById("lbm-streamlines") as HTMLInputElement;
+const runLbmBtn = document.getElementById("run-lbm") as HTMLButtonElement;
+
+lbmDirModeSelect.addEventListener("change", () => {
+  lbmDirManualRow.hidden = lbmDirModeSelect.value !== "manual";
+});
+
+lbmHeatmapChk.addEventListener("change", () => {
+  if (lbmHeatmap) lbmHeatmap.mesh.visible = lbmHeatmapChk.checked;
+});
+lbmStreamChk.addEventListener("change", () => {
+  if (lbmStreamGroup) lbmStreamGroup.visible = lbmStreamChk.checked;
+});
+
+function clearLbmOverlays(): void {
+  if (lbmHeatmap) {
+    lbmHeatmap.dispose();
+    lbmHeatmap = null;
+  }
+  if (lbmStreamGroup) {
+    disposeWindOverlay(lbmStreamGroup);
+    lbmStreamGroup = null;
+  }
+}
+
+/** 실행 중이면 워커까지 강제 종료 — 배치 변경 무효화·지우기 공용 */
+function resetLbm(note?: string): void {
+  if (lbmWorker) {
+    lbmWorker.terminate();
+    lbmWorker = null;
+  }
+  runLbmBtn.textContent = "LBM 정밀 시뮬레이션";
+  lastLbm = null;
+  clearLbmOverlays();
+  renderLbmSummary(null, note);
+}
+
+runLbmBtn.addEventListener("click", async () => {
+  if (lbmWorker) {
+    // 실행 중 — 부드러운 중지 요청 (워커가 현재 상태로 done을 보낸다)
+    lbmWorker.postMessage({ type: "stop" } satisfies LbmStopMessage);
+    setStatus("LBM 중지 요청 — 현재 스텝까지의 결과를 정리합니다…");
+    return;
+  }
+  if (project.buildings.length === 0) {
+    setStatus("먼저 DXF를 불러오세요.");
+    return;
+  }
+  try {
+    // 풍향 — EPW 주풍향(자동, M8의 기상데이터·기간 선택 공유) 또는 수동 입력
+    let windDir: number;
+    let dirSource: "epw" | "manual";
+    if (lbmDirModeSelect.value === "manual") {
+      windDir = ((parseFloat(lbmDirDegInput.value) || 0) % 360 + 360) % 360;
+      dirSource = "manual";
+    } else {
+      setStatus("LBM — EPW 풍향통계 불러오는 중…");
+      const rose = await loadWindRose(windEpwSelect.value);
+      const month = windMonthSelect.value ? parseInt(windMonthSelect.value, 10) : null;
+      const stats = month === null ? rose.annual : rose.monthly[month - 1];
+      if (stats.hours === 0) throw new Error("선택한 기간에 유효한 풍향 데이터가 없습니다");
+      windDir = stats.prevailingDirDeg;
+      dirSource = "epw";
+    }
+    const windSpeed = Math.max(0.5, parseFloat(lbmSpeedInput.value) || 3.1);
+    const gridM =
+      lbmGridSelect.value === "auto"
+        ? chooseLbmGridM(project.buildings, project.site, windDir)
+        : parseInt(lbmGridSelect.value, 10);
+
+    const domain = buildLbmDomain(project.buildings, project.site, windDir, gridM);
+    resetLbm();
+    lbmHeatmap = createLbmHeatmap(domain);
+    lbmHeatmap.mesh.visible = lbmHeatmapChk.checked;
+    viewer.scene.add(lbmHeatmap.mesh);
+
+    const worker = new Worker(new URL("./lbm.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    lbmWorker = worker;
+    runLbmBtn.textContent = "중지";
+    setStatus(
+      `LBM 시뮬레이션 시작 — 풍향 ${windDirLabel(windDir)}(${windDir.toFixed(0)}°) · ` +
+        `격자 ${gridM}m (${domain.nx}×${domain.ny})`,
+    );
+
+    worker.onmessage = (ev: MessageEvent<LbmProgressMessage | LbmDoneMessage>) => {
+      const msg = ev.data;
+      if (msg.type === "progress") {
+        lbmHeatmap?.update(msg.ratio);
+        const pct = Math.min(99, Math.round((msg.step / LBM_MAX_STEPS) * 100));
+        setStatus(
+          `LBM 시뮬레이션 중… ${pct}% — ${msg.step}스텝, 잔차 ${(msg.residual * 100).toFixed(2)}% (목표 <0.1%)`,
+        );
+        return;
+      }
+      // done — 지표·유선까지 조립하고 워커 정리
+      worker.terminate();
+      lbmWorker = null;
+      runLbmBtn.textContent = "LBM 정밀 시뮬레이션";
+      const result = assembleLbmResult(domain, msg.ux, msg.uy, project.buildings, {
+        windDirDeg: windDir,
+        windDirSource: dirSource,
+        windSpeedMs: windSpeed,
+        steps: msg.steps,
+        converged: msg.converged,
+      });
+      lastLbm = result;
+      lbmHeatmap?.update(result.ratio);
+      lbmStreamGroup = createWindOverlay(
+        {
+          windDir,
+          windSpeedMs: windSpeed,
+          month: null,
+          streamlines: result.streamlines,
+          shadowAreaM2: result.shadowAreaM2,
+        },
+        viewer.scene,
+      );
+      lbmStreamGroup.name = "lbm-streamlines";
+      lbmStreamGroup.visible = lbmStreamChk.checked;
+      renderLbmSummary(
+        result,
+        `D2Q9 · 격자 ${gridM}m · ${dirSource === "epw" ? "EPW 주풍향" : "수동 풍향"} · 2D — CFD 상세 대체 아님`,
+      );
+      const gain = ((result.maxRatio - 1) * 100).toFixed(0);
+      setStatus(
+        msg.converged
+          ? `LBM 수렴 완료 (${msg.steps}스텝) — 최대 증가율 +${gain}% · 바람 그늘 ${result.shadowAreaM2.toFixed(0)}㎡`
+          : `LBM ${msg.stopped ? "중지됨" : "미수렴"} (${msg.steps}스텝) — 결과는 참고용`,
+      );
+    };
+    worker.onerror = (e) => {
+      resetLbm();
+      setStatus(`LBM 워커 오류: ${e.message}`);
+    };
+    // solid 마스크는 복사 전송(transfer 아님) — 메인 스레드가 히트맵에 계속 쓴다
+    worker.postMessage({ type: "run", domain } satisfies LbmRunMessage);
+  } catch (err) {
+    resetLbm();
+    setStatus(`LBM 실패: ${(err as Error).message}`);
+    console.error(err);
+  }
+});
+
+document.getElementById("clear-lbm")!.addEventListener("click", () => {
+  resetLbm();
+  setStatus("LBM 결과를 지웠습니다.");
 });
 
 // ---------- 일조시간 지도 (M9) ----------
