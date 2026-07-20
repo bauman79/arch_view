@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import XLSX from "xlsx-js-style";
 import { buildWorkbook } from "./excel";
+import type { LbmResult } from "./lbm";
 import { createTemplateBuilding } from "./massing";
 import type { NorthSetbackResult } from "./northsetback";
 import type { PvResult } from "./pv";
@@ -41,7 +42,7 @@ function cell(ws: XLSX.WorkSheet, addr: string): XLSX.CellObject | undefined {
 }
 
 describe("엑셀 내보내기 round-trip", () => {
-  it("시트 6개 (배치 개요 · 일조권 · 정북사선 · PV · 바람길분석 · 일조시간)", () => {
+  it("시트 7개 (배치 개요 · 일조권 · 정북사선 · PV · 바람길분석 · LBM · 일조시간)", () => {
     const wb = roundTrip(buildWorkbook(mkProject(), null, null, null));
     expect(wb.SheetNames).toEqual([
       "배치 개요",
@@ -49,8 +50,54 @@ describe("엑셀 내보내기 round-trip", () => {
       "정북사선 결과",
       "PV 결과",
       "바람길분석",
+      "LBM 바람 분석",
       "일조시간",
     ]);
+  });
+
+  it("LBM 시트: 미실행이면 표기, 결과가 있으면 수렴·증가율·그늘 면적이 채워진다", () => {
+    const empty = roundTrip(buildWorkbook(mkProject(), null, null, null));
+    expect(cell(empty.Sheets["LBM 바람 분석"], "A2")?.v).toBe("(LBM 시뮬레이션 미실행)");
+
+    const lbm: LbmResult = {
+      windDirDeg: 270,
+      windDirSource: "epw",
+      windSpeedMs: 3.1,
+      gridM: 2,
+      steps: 1234,
+      converged: true,
+      domain: {
+        nx: 50,
+        ny: 40,
+        gridM: 2,
+        lx0: 0,
+        ly0: 0,
+        angle: 0,
+        solid: new Uint8Array(2000),
+        fluidCells: 2000,
+      },
+      ratio: new Float32Array(2000),
+      maxRatio: 1.42,
+      shadowAreaM2: 380,
+      streamlines: [],
+    };
+    const wb = roundTrip(
+      buildWorkbook(mkProject(), null, null, null, null, null, null, lbm),
+    );
+    const ws = wb.Sheets["LBM 바람 분석"];
+    const byLabel = new Map<string, XLSX.CellObject>();
+    for (let r = 2; r <= 20; r++) {
+      const k = cell(ws, `A${r}`);
+      const v = cell(ws, `B${r}`);
+      if (k && v) byLabel.set(String(k.v), v);
+    }
+    expect(byLabel.get("풍향(방위)")?.v).toBe("서");
+    expect(byLabel.get("풍향 출처")?.v).toBe("EPW 주풍향");
+    expect(byLabel.get("유입 풍속 U₀(m/s)")?.v).toBeCloseTo(3.1, 6);
+    expect(byLabel.get("스텝 수")?.v).toBe(1234);
+    expect(byLabel.get("수렴 여부")?.v).toBe("수렴 완료");
+    expect(byLabel.get("최대 풍속 증가율(%, 협곡효과)")?.v).toBeCloseTo(42, 6);
+    expect(byLabel.get("바람 그늘 면적(㎡, U<0.5×U₀)")?.v).toBe(380);
   });
 
   it("배치 개요: 헤더·평형별 행 분리·세대수·숫자 타입", () => {

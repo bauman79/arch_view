@@ -13,11 +13,13 @@ import type { PvEnergyResult } from "./pvenergy";
 import type { SunHoursResult } from "./sunhours";
 import type { SunHoursMapResult } from "./sunhoursmap";
 import { windDirLabel, type WindResult } from "./wind";
+import type { LbmResult } from "./lbm";
 import { mirrorLabel, type Building, type Project, type SunHoursRule } from "./types";
 
 /**
  * M6 — 엑셀(xlsx) 내보내기 (plan.md 6장).
- * 시트 4개: 배치 개요 / 일조권 검토 결과(수인한도, 인접건물) / 정북사선 결과 / PV 결과(M4 상대 + M5 절대 kWh).
+ * 시트 7개: 배치 개요 / 일조권 검토 결과(수인한도, 인접건물) / 정북사선 결과 /
+ * PV 결과(M4 상대 + M5 절대 kWh) / 바람길분석(M8) / LBM 바람 분석(M10) / 일조시간(M9).
  * xlsx는 내부가 UTF-8 zip이라 CSV와 달리 BOM 없이도 한글이 깨지지 않는다.
  * 숫자 셀은 숫자 타입(t:"n")으로, 헤더는 굵게(xlsx-js-style) 넣는다.
  */
@@ -347,7 +349,37 @@ export function buildWindRows(result: WindResult | null): Cell[][] {
   return rows;
 }
 
-// ---------- 시트 6: 일조시간 지도 (M9) ----------
+// ---------- 시트 6: LBM 바람 분석 (M10) ----------
+
+/** M10 — D2Q9 LBM 시뮬레이션 결과: 수렴·최대 증가율(협곡효과)·바람 그늘 면적 */
+export function buildLbmRows(result: LbmResult | null): Cell[][] {
+  const header: Cell[] = ["항목", "값"];
+  const rows: Cell[][] = [header];
+  if (!result) {
+    rows.push(["(LBM 시뮬레이션 미실행)"]);
+    return rows;
+  }
+  rows.push(["풍향(도, 0=북)", round(result.windDirDeg, 1)]);
+  rows.push(["풍향(방위)", windDirLabel(result.windDirDeg)]);
+  rows.push(["풍향 출처", result.windDirSource === "epw" ? "EPW 주풍향" : "수동 입력"]);
+  rows.push(["유입 풍속 U₀(m/s)", round(result.windSpeedMs, 2)]);
+  rows.push(["격자 해상도(m)", result.gridM]);
+  rows.push(["격자 크기(셀)", `${result.domain.nx} × ${result.domain.ny}`]);
+  rows.push(["스텝 수", result.steps]);
+  rows.push(["수렴 여부", result.converged ? "수렴 완료" : "미수렴(참고용)"]);
+  rows.push([]);
+  rows.push(["최대 풍속 증가율(%, 협곡효과)", round((result.maxRatio - 1) * 100, 1)]);
+  rows.push(["최대 풍속(m/s)", round(result.maxRatio * result.windSpeedMs, 2)]);
+  rows.push(["바람 그늘 면적(㎡, U<0.5×U₀)", round(result.shadowAreaM2, 0)]);
+  rows.push([]);
+  rows.push([
+    "비고",
+    "2D D2Q9 격자 볼츠만 — 지붕 위 흐름·난류 상세 미반영, 바람길(M8)과 별개 모드",
+  ]);
+  return rows;
+}
+
+// ---------- 시트 7: 일조시간 지도 (M9) ----------
 
 /** M9 — 기준일별 지면·표면 일조시간 통계와 법적기준(연속2h/총4h) 참고 판정 */
 export function buildSunHoursMapRows(result: SunHoursMapResult | null): Cell[][] {
@@ -393,6 +425,7 @@ export function buildWorkbook(
   pvEnergy: PvEnergyResult | null = null,
   wind: WindResult | null = null,
   sunHoursMap: SunHoursMapResult | null = null,
+  lbm: LbmResult | null = null,
 ): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
   const overview = buildOverviewRows(project);
@@ -435,6 +468,11 @@ export function buildWorkbook(
   );
   XLSX.utils.book_append_sheet(
     wb,
+    sheetFromRows(buildLbmRows(lbm), [0], [30, 34]),
+    "LBM 바람 분석",
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
     sheetFromRows(buildSunHoursMapRows(sunHoursMap), [0], [24, 34]),
     "일조시간",
   );
@@ -450,8 +488,18 @@ export function exportXlsx(
   pvEnergy: PvEnergyResult | null = null,
   wind: WindResult | null = null,
   sunHoursMap: SunHoursMapResult | null = null,
+  lbm: LbmResult | null = null,
 ): string {
-  const wb = buildWorkbook(project, sunHours, northSetback, pv, pvEnergy, wind, sunHoursMap);
+  const wb = buildWorkbook(
+    project,
+    sunHours,
+    northSetback,
+    pv,
+    pvEnergy,
+    wind,
+    sunHoursMap,
+    lbm,
+  );
   const filename = `arch_view_배치검토_${new Date().toISOString().slice(0, 10)}.xlsx`;
   XLSX.writeFile(wb, filename);
   return filename;

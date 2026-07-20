@@ -1510,10 +1510,11 @@ document.getElementById("export-xlsx")!.addEventListener("click", () => {
     lastPvEnergy,
     lastWind,
     lastSunHoursMap,
+    lastLbm,
   );
   const t = siteUnitTotals(project.buildings);
   setStatus(
-    `엑셀 내보냄 — ${filename} (배치 개요 · 일조권 · 정북사선 · PV · 바람길 · 일조시간, 총 ${t.total}세대)`,
+    `엑셀 내보냄 — ${filename} (배치 개요 · 일조권 · 정북사선 · PV · 바람길 · LBM · 일조시간, 총 ${t.total}세대)`,
   );
 });
 
