@@ -169,8 +169,8 @@ const FAIL_COLOR = 0xe5484d; // 위반 — 빨강
 const MARKER_Y = 1.8;
 
 // 매 프레임 재생성되므로 지오메트리·머티리얼은 모듈 공유(디스포즈 금지)
-const markerGeom = new THREE.SphereGeometry(0.6, 12, 10);
-const rayGeom = new THREE.CylinderGeometry(0.12, 0.12, 1, 6);
+const markerGeom = new THREE.SphereGeometry(0.8, 12, 10);
+const rayGeom = new THREE.CylinderGeometry(0.3, 0.3, 1, 8);
 const passMat = new THREE.MeshBasicMaterial({ color: PASS_COLOR });
 const failMat = new THREE.MeshBasicMaterial({ color: FAIL_COLOR });
 const failRayMat = new THREE.MeshBasicMaterial({
@@ -182,24 +182,35 @@ const failRayMat = new THREE.MeshBasicMaterial({
 /**
  * 검토 결과 오버레이 — 창 위치 마커(초록/빨강) + 위반 창의 법선 방향 기준선까지 사선.
  * 공유 지오메트리·머티리얼만 쓰므로 그룹 제거 시 dispose 불필요.
+ * @param elevate (x,y DXF)→지형 고도(m). 주면 마커·사선을 지형 표면 위로 올린다
+ *   (M7 — 지형 면에 묻히지 않게. 판정 자체는 동일 레벨 기준 그대로).
  */
-export function createDaylightOverlay(result: DaylightResult): THREE.Group {
+export function createDaylightOverlay(
+  result: DaylightResult,
+  elevate?: (x: number, y: number) => number,
+): THREE.Group {
   const group = new THREE.Group();
   const up = new THREE.Vector3(0, 1, 0);
+  const yAt = (x: number, y: number) => (elevate ? elevate(x, y) : 0) + MARKER_Y;
   for (const c of result.checks) {
     const marker = new THREE.Mesh(markerGeom, c.pass ? passMat : failMat);
-    marker.position.set(c.point.x, MARKER_Y, -c.point.y); // DXF y+ → three -z
+    marker.position.set(c.point.x, yAt(c.point.x, c.point.y), -c.point.y); // DXF y+ → three -z
     group.add(marker);
 
     if (!c.pass && c.distance !== null) {
-      const dir = new THREE.Vector3(c.normal.x, 0, -c.normal.y);
-      const ray = new THREE.Mesh(rayGeom, failRayMat);
-      ray.scale.set(1, c.distance, 1);
-      ray.quaternion.setFromUnitVectors(up, dir);
-      ray.position
-        .set(c.point.x, MARKER_Y, -c.point.y)
-        .addScaledVector(dir, c.distance / 2);
-      group.add(ray);
+      // 끝점(기준선 위치)도 각자 지형 고도에 얹어 기울어진 실린더로 연결
+      const ex = c.point.x + c.normal.x * c.distance;
+      const ey = c.point.y + c.normal.y * c.distance;
+      const a = new THREE.Vector3(c.point.x, yAt(c.point.x, c.point.y), -c.point.y);
+      const b = new THREE.Vector3(ex, yAt(ex, ey), -ey);
+      const len = a.distanceTo(b);
+      if (len > 1e-6) {
+        const ray = new THREE.Mesh(rayGeom, failRayMat);
+        ray.scale.set(1, len, 1);
+        ray.quaternion.setFromUnitVectors(up, b.clone().sub(a).normalize());
+        ray.position.copy(a).add(b).multiplyScalar(0.5);
+        group.add(ray);
+      }
     }
   }
   return group;

@@ -189,8 +189,8 @@ const FAIL_COLOR = 0xe5484d; // 위반 — 빨강
 const MARKER_Y = 1.8;
 
 // 매 프레임 재생성되므로 지오메트리·머티리얼은 모듈 공유(디스포즈 금지)
-const markerGeom = new THREE.SphereGeometry(0.7, 12, 10);
-const rayGeom = new THREE.CylinderGeometry(0.15, 0.15, 1, 6);
+const markerGeom = new THREE.SphereGeometry(0.9, 12, 10);
+const rayGeom = new THREE.CylinderGeometry(0.35, 0.35, 1, 8);
 const passMat = new THREE.MeshBasicMaterial({ color: PASS_COLOR });
 const failMat = new THREE.MeshBasicMaterial({ color: FAIL_COLOR });
 const passRayMat = new THREE.MeshBasicMaterial({
@@ -208,32 +208,35 @@ const failRayMat = new THREE.MeshBasicMaterial({
  * 검토 결과 오버레이 — 건물의 가장 불리한 부분에서 정북 방향 경계선까지의 검토선을
  * 적합(초록)/위반(빨강)으로 **항상** 표시하고, 시작점에 마커를 찍는다.
  * 공유 지오메트리·머티리얼만 쓰므로 그룹 제거 시 dispose 불필요.
+ * @param elevate (x,y DXF)→지형 고도(m). 주면 마커·검토선을 지형 표면 위로 올린다
+ *   (M7 — 지형 면에 검토선이 묻히지 않게. 법적 판정 자체는 동일 레벨 기준 그대로).
  */
-export function createNorthSetbackOverlay(result: NorthSetbackResult): THREE.Group {
+export function createNorthSetbackOverlay(
+  result: NorthSetbackResult,
+  elevate?: (x: number, y: number) => number,
+): THREE.Group {
   const group = new THREE.Group();
   const up = new THREE.Vector3(0, 1, 0);
+  const yAt = (x: number, y: number) => (elevate ? elevate(x, y) : 0) + MARKER_Y;
   for (const c of result.checks) {
     const marker = new THREE.Mesh(markerGeom, c.pass ? passMat : failMat);
-    marker.position.set(c.origin.x, MARKER_Y, -c.origin.y); // DXF y+ → three -z
+    marker.position.set(c.origin.x, yAt(c.origin.x, c.origin.y), -c.origin.y); // DXF y+ → three -z
     group.add(marker);
 
     if (c.distance !== null && c.distance > 1e-6 && c.point !== null) {
-      const dir = new THREE.Vector3(
-        c.point.x - c.origin.x,
-        0,
-        -(c.point.y - c.origin.y),
-      ).normalize();
+      // 양 끝점을 각자 지형 고도에 얹고 기울어진 실린더로 연결
+      const a = new THREE.Vector3(c.origin.x, yAt(c.origin.x, c.origin.y), -c.origin.y);
+      const b = new THREE.Vector3(c.point.x, yAt(c.point.x, c.point.y), -c.point.y);
+      const len = a.distanceTo(b);
       const ray = new THREE.Mesh(rayGeom, c.pass ? passRayMat : failRayMat);
-      ray.scale.set(1, c.distance, 1);
-      ray.quaternion.setFromUnitVectors(up, dir);
-      ray.position
-        .set(c.origin.x, MARKER_Y, -c.origin.y)
-        .addScaledVector(dir, c.distance / 2);
+      ray.scale.set(1, len, 1);
+      ray.quaternion.setFromUnitVectors(up, b.clone().sub(a).normalize());
+      ray.position.copy(a).add(b).multiplyScalar(0.5);
       group.add(ray);
 
       const endMarker = new THREE.Mesh(markerGeom, c.pass ? passMat : failMat);
       endMarker.scale.setScalar(0.6);
-      endMarker.position.set(c.point.x, MARKER_Y, -c.point.y);
+      endMarker.position.copy(b);
       group.add(endMarker);
     }
   }

@@ -204,6 +204,16 @@ function applyTerrainVisibility(): void {
 }
 
 /**
+ * 지형 고도 샘플러 — 지형 없으면 null. 검토선·히트맵·유선을 지형 표면 위에 얹는
+ * 표시 전용 공용 헬퍼 (법적 판정·시뮬레이션 계산에는 쓰지 않는다).
+ */
+function terrainSampler(): ((x: number, y: number) => number) | undefined {
+  const tm = terrainModel;
+  if (!tm) return undefined;
+  return (x, y) => sampleElevation(tm, x, y) ?? nearestPointElevation(tm, x, y);
+}
+
+/**
  * 건물 G.L.(terrainElevation) 재계산 — offset 반영된 월드 footprint 꼭짓점 고도 평균.
  * 지형이 없으면 0. 렌더 위치(applyOffset)의 y로만 쓰이고 법적 검토에는 미반영(M7 방침).
  */
@@ -1001,9 +1011,10 @@ function updateSetbackChecks(): void {
   lastNorthSetback = runNorthSetbackCheck(project);
   lastDaylight = daylightOn ? runDaylightCheck(project) : null;
   lastSpacing = spacingOn ? runSpacingCheck(project) : null;
-  northSetbackRoot.add(createNorthSetbackOverlay(lastNorthSetback));
-  if (lastDaylight) daylightRoot.add(createDaylightOverlay(lastDaylight));
-  if (lastSpacing) spacingRoot.add(createSpacingOverlay(lastSpacing));
+  const elev = terrainSampler(); // 지형 위 표시 (M7) — 판정 계산과 무관, 표시 전용
+  northSetbackRoot.add(createNorthSetbackOverlay(lastNorthSetback, elev));
+  if (lastDaylight) daylightRoot.add(createDaylightOverlay(lastDaylight, elev));
+  if (lastSpacing) spacingRoot.add(createSpacingOverlay(lastSpacing, elev));
   renderSetbackSummary(lastNorthSetback, lastDaylight, lastSpacing);
   refreshStatusDots(computeStatusMap());
 }
@@ -1325,13 +1336,7 @@ runLbmBtn.addEventListener("click", async () => {
     const domain = buildLbmDomain(project.buildings, project.site, windDir, gridM);
     resetLbm();
     // 지형이 있으면 히트맵을 지형 표면에 드레이프 — 없으면 평지(y=0.2)
-    const tm = terrainModel;
-    lbmHeatmap = createLbmHeatmap(
-      domain,
-      tm
-        ? (x, y) => sampleElevation(tm, x, y) ?? nearestPointElevation(tm, x, y)
-        : undefined,
-    );
+    lbmHeatmap = createLbmHeatmap(domain, terrainSampler());
     lbmHeatmap.mesh.visible = lbmHeatmapChk.checked;
     viewer.scene.add(lbmHeatmap.mesh);
 

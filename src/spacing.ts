@@ -339,15 +339,21 @@ const failMat = new THREE.MeshBasicMaterial({ color: FAIL_COLOR });
 /**
  * 마주보는 벽면 쌍의 직각방향 이격선 오버레이 (빨강=위반, 회색=적합).
  * 공유 지오메트리·머티리얼만 쓰므로 그룹 제거 시 dispose 불필요.
+ * @param elevate (x,y DXF)→지형 고도(m). 주면 이격선을 지형 표면 위로 올린다
+ *   (M7 — 지형 면에 묻히지 않게. 판정 자체는 동일 레벨 기준 그대로).
  */
-export function createSpacingOverlay(result: SpacingResult): THREE.Group {
+export function createSpacingOverlay(
+  result: SpacingResult,
+  elevate?: (x: number, y: number) => number,
+): THREE.Group {
   const group = new THREE.Group();
   const up = new THREE.Vector3(0, 1, 0);
+  const yAt = (x: number, y: number) => (elevate ? elevate(x, y) : 0) + LINE_Y;
   for (const c of result.checks) {
     const mat = c.pass ? passMat : failMat;
-    const radius = c.pass ? 0.15 : 0.3;
-    const a = new THREE.Vector3(c.pa.x, LINE_Y, -c.pa.y); // DXF y+ → three -z
-    const b = new THREE.Vector3(c.pb.x, LINE_Y, -c.pb.y);
+    const radius = c.pass ? 0.3 : 0.5;
+    const a = new THREE.Vector3(c.pa.x, yAt(c.pa.x, c.pa.y), -c.pa.y); // DXF y+ → three -z
+    const b = new THREE.Vector3(c.pb.x, yAt(c.pb.x, c.pb.y), -c.pb.y);
     const len = a.distanceTo(b);
 
     if (len > 1e-6) {
