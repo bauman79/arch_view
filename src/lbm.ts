@@ -31,8 +31,12 @@ const MIRROR_Y = [0, 1, 4, 3, 2, 8, 7, 6, 5] as const;
 
 /** 유입 격자 속도 (lattice units) — Ma≈0.17, 비압축성 근사 유효 범위 */
 export const LBM_U_LAT = 0.1;
-/** BGK 완화 시간 — ν=(τ-0.5)/3≈0.033, 건물 20셀 기준 Re≈60 (정상 수렴 가능 영역) */
-export const LBM_TAU = 0.6;
+/**
+ * BGK 완화 시간 — ν=(τ-0.5)/3=0.1, 건물 20셀 기준 Re≈20.
+ * τ=0.6(Re≈60)은 와류 방출 경계라 잔차가 0.5%대에서 정체(미수렴) — 배치 검토가
+ * 원하는 것은 정상(steady) 유동 패턴이므로 점성을 키워 확실히 수렴시킨다.
+ */
+export const LBM_TAU = 0.8;
 /** 수렴 판단 — 연속 LBM_CONV_STREAK 스텝 동안 최대 속도 변화율 < LBM_CONV_TOL */
 export const LBM_CONV_TOL = 0.001;
 export const LBM_CONV_STREAK = 10;
@@ -120,10 +124,11 @@ function computeFlowExtent(
     maxY = 30;
   }
   const span = Math.max(maxX - minX, maxY - minY);
-  // 업풍은 짧게, 다운스트림은 후류가 담기도록 길게, 측면은 중간
+  // 업풍은 짧게, 다운스트림은 후류가 담기도록 길게. 측면은 슬립 벽이라 좁으면
+  // 블로키지(채널 가속)로 전역 속도가 부풀어 오른다 — 0.75×span으로 여유를 둔다
   const upstream = Math.max(20, 0.5 * span);
   const downstream = Math.max(30, 1.0 * span);
-  const lateral = Math.max(20, 0.5 * span);
+  const lateral = Math.max(25, 0.75 * span);
   return {
     angle,
     footprints,

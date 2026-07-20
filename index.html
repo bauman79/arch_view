@@ -549,6 +549,11 @@
         background: #ffffff;
       }
 
+      /* .row는 display:flex라 hidden 속성이 안 먹는다 — LBM 수동 풍향 행 토글용 */
+      .row[hidden] {
+        display: none;
+      }
+
       /* 좌측 패널 섹션 내부 소구분선 — M8 바람길 ↔ M10 LBM */
       .subsec-divider {
         border: 0;
