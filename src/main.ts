@@ -20,6 +20,8 @@ import {
 import {
   buildTerrainModel,
   createTerrainGroup,
+  nearestPointElevation,
+  sampleElevation,
   terrainElevationForFootprint,
   type TerrainModel,
 } from "./terrain";
@@ -1322,7 +1324,14 @@ runLbmBtn.addEventListener("click", async () => {
 
     const domain = buildLbmDomain(project.buildings, project.site, windDir, gridM);
     resetLbm();
-    lbmHeatmap = createLbmHeatmap(domain);
+    // 지형이 있으면 히트맵을 지형 표면에 드레이프 — 없으면 평지(y=0.2)
+    const tm = terrainModel;
+    lbmHeatmap = createLbmHeatmap(
+      domain,
+      tm
+        ? (x, y) => sampleElevation(tm, x, y) ?? nearestPointElevation(tm, x, y)
+        : undefined,
+    );
     lbmHeatmap.mesh.visible = lbmHeatmapChk.checked;
     viewer.scene.add(lbmHeatmap.mesh);
 
@@ -1852,6 +1861,7 @@ canvas.addEventListener("pointermove", (e) => {
     delta = Math.atan2(Math.sin(delta), Math.cos(delta));
     rotate.lastAngle = cur;
     rotate.building.offset.rotation += THREE.MathUtils.radToDeg(delta);
+    refreshTerrainElevation(rotate.building); // M7 — 회전으로 footprint가 돌면 G.L.도 변함
     applyOffset(rotate.group, rotate.building);
     updateRotationHandle();
     refreshOffsetInfo(rotate.building);
@@ -1865,6 +1875,7 @@ canvas.addEventListener("pointermove", (e) => {
   // three 좌표 → DXF 평면: dx = Δx, dy = -Δz
   drag.building.offset.dx = drag.startOffset.dx + (hit.x - drag.startHit.x);
   drag.building.offset.dy = drag.startOffset.dy - (hit.z - drag.startHit.z);
+  refreshTerrainElevation(drag.building); // M7 — 드래그 중에도 지형 G.L. 추종 (공중부양/매몰 방지)
   applyOffset(drag.group, drag.building);
   updateRotationHandle();
   refreshOffsetInfo(drag.building);
