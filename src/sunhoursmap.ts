@@ -14,8 +14,9 @@ import type { Point2, Project } from "./types";
 
 /**
  * M9 — 일조시간 지도.
- * 지면(건물 외부 z=0)과 계획주동 표면을 격자로 나눠 기준일 08~16시(30분 간격)
- * 직달일조 시간을 히트맵으로 표시한다. "어디가 몇 시간 해가 드는가"를 보는
+ * 지면(건물 외부 z=0)과 **전체 건물 표면(계획주동 + 인접건물 입면·지붕)**을 격자로
+ * 나눠 기준일 08~16시(30분 간격) 직달일조 시간을 히트맵으로 표시한다 — 계획주동이
+ * 인접건물의 일조를 얼마나 깎는지 확인하는 것이 핵심 용도. "어디가 몇 시간 해가 드는가"를 보는
  * **시각화 도구**로, 인접건물 적합/위반을 판정하는 일조권 검토(sunhours.ts,
  * M2.1 수인한도)와는 별개다 — 두 모듈을 합치거나 한쪽을 지우지 말 것(PLAN.md 2장).
  * 법적기준 오버레이(showLegal)는 같은 셀에 연속2h(9~15시)/총4h(8~16시) 충족 여부를
@@ -171,11 +172,14 @@ export async function runSunHoursMap(
     ),
   );
 
-  // 계획주동 표면 (기존 인프라 재사용) + 지면 격자
+  // 전체 건물 표면(계획주동 + 인접건물 입면·지붕) + 지면 격자 — 계획주동이 인접
+  // 건물의 일조를 얼마나 깎는지가 핵심 검증 대상이라 인접건물 표면을 반드시 포함한다
   const buildingCells: WorkCell[] = buildAnalysisGrid(
     buildings,
     SUNMAP_GRID_M,
     site.northAngle,
+    false,
+    () => true, // analysisTarget 무시 — 인접건물 표면도 격자 생성
   ).map((c) => ({ center: c.center, normal: c.normal, w: c.w, h: c.h, isGround: false }));
   const work = [...buildGroundGrid(project), ...buildingCells];
   const meshes = buildObstructionMeshes(buildings);

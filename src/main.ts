@@ -158,6 +158,7 @@ let terrainModel: TerrainModel | null = null;
 let terrainGroup: THREE.Group | null = null;
 let terrainVisible = true;
 let terrainWireframe = false;
+let terrainStepped = false;
 
 /** 지형 클리핑 기준 — 닫힌 SITE_BOUNDARY 오버레이 (없으면 클리핑 없이 전체 표시) */
 function siteClipPolygon(): Point2[] | null {
@@ -189,12 +190,27 @@ function rebuildTerrain(): void {
     : "지형 없음 — CONTOUR 레이어가 있는 DXF를 불러오면 표시됩니다.";
 }
 
-/** 지형 표시·와이어프레임 토글 상태를 메시에 반영 + 대지 회색 채움과의 교대 표시 */
+/**
+ * 지형 표시·와이어프레임·계단식 토글 상태를 메시에 반영 + 대지 회색 채움과의 교대 표시.
+ * - 계단식: 매끈한 TIN(면·와이어) 대신 등고 단 기둥을 표시
+ * - 와이어프레임: 삼각망을 켜고 면을 반투명으로 — 경사면 너머의 검토선·건물이 비쳐 보인다
+ */
 function applyTerrainVisibility(): void {
   if (terrainGroup) {
     terrainGroup.visible = terrainVisible;
+    const solid = terrainGroup.getObjectByName("terrain-solid") as THREE.Mesh | undefined;
     const wire = terrainGroup.getObjectByName("terrain-wire");
-    if (wire) wire.visible = terrainWireframe;
+    const stepped = terrainGroup.getObjectByName("terrain-stepped");
+    if (solid) {
+      solid.visible = !terrainStepped;
+      const mat = solid.material as THREE.MeshLambertMaterial;
+      mat.transparent = terrainWireframe;
+      mat.opacity = terrainWireframe ? 0.35 : 1;
+      mat.depthWrite = !terrainWireframe; // 반투명일 때 뒤 물체가 깊이에 막히지 않게
+      mat.needsUpdate = true;
+    }
+    if (wire) wire.visible = terrainWireframe && !terrainStepped;
+    if (stepped) stepped.visible = terrainStepped;
   }
   // 지형 메시가 보이는 동안 기존 평지용 회색 SITE_BOUNDARY 채움은 숨긴다 (겹침 방지)
   const hideFill = terrainModel !== null && terrainVisible;
@@ -235,6 +251,14 @@ terrainVisibleInput.addEventListener("change", () => {
 
 terrainWireInput.addEventListener("change", () => {
   terrainWireframe = terrainWireInput.checked;
+  applyTerrainVisibility();
+});
+
+const terrainSteppedInput = document.getElementById(
+  "terrain-stepped",
+) as HTMLInputElement;
+terrainSteppedInput.addEventListener("change", () => {
+  terrainStepped = terrainSteppedInput.checked;
   applyTerrainVisibility();
 });
 
@@ -1223,7 +1247,7 @@ runWindBtn.addEventListener("click", async () => {
       streamlines,
       shadowAreaM2: field.shadowAreaM2,
     };
-    windGroup = createWindOverlay(lastWind, viewer.scene);
+    windGroup = createWindOverlay(lastWind, viewer.scene, terrainSampler());
     renderWindSummary(
       lastWind,
       `${label} EPW ${stats.hours}시간 통계 · 격자 ${WIND_GRID_M}m · 2D 포텐셜 근사(CFD 아님)`,
@@ -1382,6 +1406,7 @@ runLbmBtn.addEventListener("click", async () => {
           shadowAreaM2: result.shadowAreaM2,
         },
         viewer.scene,
+        terrainSampler(),
       );
       lbmStreamGroup.name = "lbm-streamlines";
       lbmStreamGroup.visible = lbmStreamChk.checked;

@@ -495,23 +495,45 @@ export function windColorHex(speedRatio: number): number {
   return 0xef4444;
 }
 
-const WIND_OVERLAY_Y = 0.3;
+const WIND_OVERLAY_Y = 0.5;
+/** 유선 튜브 반지름 (m) — GL 라인은 굵기 지정이 안 먹혀 튜브 메시로 그린다 */
+const WIND_TUBE_RADIUS = 0.35;
 
-/** 스트림라인을 지면 위 0.3m 라인 묶음으로 표시 — scene에 추가하고 그룹을 반환 */
-export function createWindOverlay(result: WindResult, scene: THREE.Scene): THREE.Group {
+/**
+ * 스트림라인을 지면 위 튜브 묶음으로 표시 — scene에 추가하고 그룹을 반환.
+ * @param elevate (x,y DXF)→지형 고도(m). 주면 유선을 지형 표면을 따라 드레이프한다
+ *   (표시 전용 — 속도장 계산은 지형과 무관한 2D).
+ */
+export function createWindOverlay(
+  result: WindResult,
+  scene: THREE.Scene,
+  elevate?: (x: number, y: number) => number,
+): THREE.Group {
   const group = new THREE.Group();
   group.name = "wind-overlay";
   for (const line of result.streamlines) {
+    if (line.points.length < 2) continue;
     const pts = line.points.map(
-      (p) => new THREE.Vector3(p.x, WIND_OVERLAY_Y, -p.y), // DXF y+ → three -z
+      (p) =>
+        new THREE.Vector3(
+          p.x,
+          (elevate ? elevate(p.x, p.y) : 0) + WIND_OVERLAY_Y,
+          -p.y, // DXF y+ → three -z
+        ),
     );
-    const geom = new THREE.BufferGeometry().setFromPoints(pts);
-    const mat = new THREE.LineBasicMaterial({
+    const geom = new THREE.TubeGeometry(
+      new THREE.CatmullRomCurve3(pts),
+      Math.min(pts.length * 2, 400),
+      WIND_TUBE_RADIUS,
+      5,
+      false,
+    );
+    const mat = new THREE.MeshBasicMaterial({
       color: windColorHex(line.speedRatio),
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.95,
     });
-    group.add(new THREE.Line(geom, mat));
+    group.add(new THREE.Mesh(geom, mat));
   }
   scene.add(group);
   return group;
@@ -520,7 +542,7 @@ export function createWindOverlay(result: WindResult, scene: THREE.Scene): THREE
 export function disposeWindOverlay(group: THREE.Group): void {
   group.removeFromParent();
   group.traverse((obj) => {
-    if (obj instanceof THREE.Line) {
+    if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
       obj.geometry.dispose();
       (obj.material as THREE.Material).dispose();
     }

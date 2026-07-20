@@ -243,8 +243,95 @@ export function createTerrainGroup(
   wire.position.y = 0.03; // 면 위로 살짝 띄워 겹침 얼룩 방지
   wire.visible = false;
 
+  const stepped = createSteppedTerrain(model, sitePoly);
+  stepped.visible = false; // 기본은 매끈한 TIN — UI "계단식" 토글로 교대 표시
+
   const group = new THREE.Group();
   group.name = "terrain";
-  group.add(solid, wire);
+  group.add(solid, wire, stepped);
   return group;
+}
+
+// ---------- 계단식(등고 단 쌓기) 표시 ----------
+
+/** 계단식 표시 격자 분할 상한 (축당) — 인스턴스 수 폭주 방지 */
+const STEP_MAX_CELLS_AXIS = 160;
+/** 최저 단도 이 두께만큼은 보이게 하는 바닥 여유 (m) */
+const STEP_BASE_PAD = 0.3;
+
+/**
+ * 등고선 레벨 목록 — 입력 점의 고유 z (등고선 점이므로 이산 레벨), 오름차순.
+ * 부동소수 잡음을 mm 단위 반올림으로 뭉친다.
+ */
+export function contourLevels(model: TerrainModel): number[] {
+  const set = new Set<number>();
+  for (const p of model.points) set.add(Math.round(p.z * 1000) / 1000);
+  return [...set].sort((a, b) => a - b);
+}
+
+/** 보간 고도 → 그 이하의 최대 등고 레벨 (계단 바닥면 — 절토 없이 단이 딛는 높이) */
+export function quantizeToLevel(levels: number[], e: number): number {
+  let lv = levels[0];
+  for (const l of levels) {
+    if (l <= e + 1e-9) lv = l;
+    else break;
+  }
+  return lv;
+}
+
+/**
+ * 계단식(콘타 단) 지형 — TIN 보간 고도를 등고 레벨로 양자화한 사각 기둥
+ * InstancedMesh. 매끈한 TIN 면의 교대 표시용(시각화 전용)이며 건물 G.L.은
+ * 계속 TIN 보간을 쓴다 — 실제 단지 계획의 계단식 성절토 검토 참고 표시.
+ */
+function createSteppedTerrain(
+  model: TerrainModel,
+  sitePoly: Point2[] | null,
+): THREE.Object3D {
+  const levels = contourLevels(model);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of model.points) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  const span = Math.max(maxX - minX, maxY - minY);
+  const cell = Math.max(1, Math.ceil(span / STEP_MAX_CELLS_AXIS));
+
+  // 1차 수집 — 대지경계·TIN hull 안쪽 셀만
+  const cells: { x: number; y: number; level: number }[] = [];
+  for (let cx = minX + cell / 2; cx < maxX; cx += cell) {
+    for (let cy = minY + cell / 2; cy < maxY; cy += cell) {
+      if (sitePoly && sitePoly.length >= 3 && !pointInPolygon(cx, cy, sitePoly)) continue;
+      const e = sampleElevation(model, cx, cy);
+      if (e === null) continue;
+      cells.push({ x: cx, y: cy, level: quantizeToLevel(levels, e) });
+    }
+  }
+
+  const base = model.minZ - STEP_BASE_PAD;
+  const inst = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshLambertMaterial({ color: TERRAIN_COLOR }),
+    cells.length,
+  );
+  const mtx = new THREE.Matrix4();
+  const quat = new THREE.Quaternion();
+  const pos = new THREE.Vector3();
+  const scale = new THREE.Vector3();
+  cells.forEach((c, i) => {
+    const h = c.level - base;
+    pos.set(c.x, base + h / 2, -c.y);
+    scale.set(cell, h, cell);
+    mtx.compose(pos, quat, scale);
+    inst.setMatrixAt(i, mtx);
+  });
+  inst.instanceMatrix.needsUpdate = true;
+  inst.receiveShadow = true;
+  inst.name = "terrain-stepped";
+  return inst;
 }

@@ -1348,8 +1348,9 @@
             <details id="sunhoursmap-section">
               <summary>일조시간 지도 (M9)</summary>
               <p class="hint">
-                지면·계획주동 표면의 기준일 08~16시 직달일조 시간 히트맵(30분 간격,
-                격자 2m). 일조권 검토(수인한도 판정)와는 별개의 시각화 도구.
+                지면·전체 건물 표면(계획주동 + 인접건물 입면·지붕)의 기준일 08~16시
+                직달일조 시간 히트맵(30분 간격, 격자 2m) — 계획주동이 인접건물 일조를
+                얼마나 깎는지 확인. 일조권 검토(수인한도 판정)와는 별개의 시각화 도구.
               </p>
               <div class="row">
                 <label for="sunhoursmap-date">기준일</label>
@@ -1390,9 +1391,19 @@
               <div class="row">
                 <label>
                   <input type="checkbox" id="terrain-wireframe" />
-                  와이어프레임 (TIN 삼각망)
+                  와이어프레임 (TIN 삼각망 + 면 반투명)
                 </label>
               </div>
+              <div class="row">
+                <label>
+                  <input type="checkbox" id="terrain-stepped" />
+                  계단식 표시 (등고 단 쌓기)
+                </label>
+              </div>
+              <p class="hint">
+                계단식은 보간 고도를 등고 레벨로 양자화한 참고 표시 — 건물
+                지반고(G.L.)는 계속 매끈한 TIN 보간 기준.
+              </p>
               <div id="terrain-summary" class="hint"></div>
             </details>
 

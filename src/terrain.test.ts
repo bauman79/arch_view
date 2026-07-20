@@ -3,9 +3,11 @@ import { parseDxfBuildings } from "./dxf";
 import {
   buildTerrainModel,
   clipTriangles,
+  contourLevels,
   contourSuffixElevation,
   isContourLayer,
   nearestPointElevation,
+  quantizeToLevel,
   sampleElevation,
   terrainElevationForFootprint,
 } from "./terrain";
@@ -220,6 +222,22 @@ describe("buildTerrainModel", () => {
     const m = buildTerrainModel(slopeContours())!;
     expect(m.minZ).toBe(0);
     expect(m.maxZ).toBe(50);
+  });
+});
+
+describe("계단식 표시 — 등고 레벨 양자화", () => {
+  it("contourLevels: 고유 z 오름차순, quantizeToLevel: 이하 최대 레벨로 내림", () => {
+    const m = buildTerrainModel(slopeContours())!;
+    const levels = contourLevels(m);
+    expect(levels[0]).toBe(0);
+    expect(levels[levels.length - 1]).toBe(50);
+    expect([...levels]).toEqual([...levels].sort((a, b) => a - b));
+    // 등고 간 보간 고도는 아래 레벨로 떨어진다 (계단 바닥면)
+    const step = levels[1];
+    expect(quantizeToLevel(levels, step * 0.7)).toBe(0);
+    expect(quantizeToLevel(levels, step + 1e-12)).toBe(step);
+    expect(quantizeToLevel(levels, -5)).toBe(0); // 최저 레벨 아래는 최저로
+    expect(quantizeToLevel(levels, 999)).toBe(50); // 최고 레벨 위는 최고로
   });
 });
 

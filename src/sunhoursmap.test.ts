@@ -26,7 +26,7 @@ function mkBuilding(
   return {
     id,
     name: id,
-    type: "인접건물", // analysisTarget=false — 표면 격자 없이 차폐(그림자)만 만든다
+    type: "인접건물", // analysisTarget=false여도 M9는 표면 격자를 만든다 (핵심 검증 대상)
     massType: "custom",
     footprint,
     floors,
@@ -84,6 +84,20 @@ describe("runSunHoursMap — 동지 시간 계산 (서울)", () => {
     const cell = groundCellAt(r.cells, 0, 13); // 북측 벽에서 3m
     expect(cell.hours).toBe(0);
     expect(r.stats.min).toBe(0);
+  });
+
+  it("인접건물(analysisTarget=false)의 입면·지붕도 표면 격자가 생성된다", async () => {
+    const r = await runSunHoursMap(mkProject([wall()]), "동지");
+    const surf = r.cells.filter((c) => !c.isGround);
+    expect(surf.length).toBeGreaterThan(0);
+    // 남향 입면(법선 -y = three +z)에 무차폐 8.5h 셀이 존재
+    const southFace = surf.filter((c) => c.normal.z > 0.9);
+    expect(southFace.length).toBeGreaterThan(0);
+    expect(Math.max(...southFace.map((c) => c.hours))).toBeCloseTo(8.5, 6);
+    // 북향 입면은 동지 직달 0h
+    const northFace = surf.filter((c) => c.normal.z < -0.9);
+    expect(northFace.length).toBeGreaterThan(0);
+    expect(Math.max(...northFace.map((c) => c.hours))).toBe(0);
   });
 });
 
