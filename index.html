@@ -985,6 +985,35 @@
         width: 220px;
       }
 
+      /* 우상단 표준 시점 버튼 */
+      #view-presets {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 6;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      #view-presets .btn {
+        background: rgba(13, 21, 37, 0.86);
+        color: #cbd5e1;
+        border-color: #1e2d4a;
+        backdrop-filter: blur(4px);
+        text-align: center;
+      }
+
+      #view-presets .btn:hover {
+        background: rgba(27, 43, 72, 0.94);
+        border-color: #3a5580;
+      }
+
+      #view-presets .btn.active {
+        border-color: #e0921a;
+        color: #f0b45a;
+      }
+
       /* 좌하단 좌표 표시 */
       #cursor-coords {
         position: absolute;
@@ -1890,6 +1919,14 @@
         <!-- 3D 캔버스 -->
         <main id="viewport">
           <div id="progress-bar"></div>
+          <!-- 표준 시점 — 태블릿에서 두 손가락 회전으로 각도 맞추기가 어려운 점 보완 -->
+          <div id="view-presets">
+            <button class="btn mini" data-view="iso">아이소</button>
+            <button class="btn mini" data-view="top">평면</button>
+            <button class="btn mini" data-view="south">남측</button>
+            <button class="btn mini" data-view="east">동측</button>
+            <button class="btn mini" data-view="west">서측</button>
+          </div>
           <div id="time-overlay">
             <span id="time-label">12:30</span>
             <input type="range" id="time-slider" min="480" max="960" step="10" value="750" />

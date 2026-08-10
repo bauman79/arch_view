@@ -7,7 +7,7 @@ import {
   unitSourceLabel,
   type UnitMode,
 } from "./dxf";
-import { Viewer } from "./viewer";
+import { Viewer, VIEW_PRESET_LABEL, type ViewPreset } from "./viewer";
 import {
   applyOffset,
   createBuildingObject,
@@ -125,6 +125,7 @@ import {
 } from "./ui";
 import { initShell, notifyRightPanel } from "./shell";
 import { isDrag } from "./pointer";
+import { shareOrDownload, shareOrDownloadText } from "./share";
 
 // PWA 서비스워커 등록 (빌드에서만 활성 — dev에서는 no-op)
 registerSW({ immediate: true });
@@ -870,7 +871,7 @@ document.getElementById("clear-pv")!.addEventListener("click", () => {
   setStatus("PV 결과를 지웠습니다.");
 });
 
-document.getElementById("export-pv-csv")!.addEventListener("click", () => {
+document.getElementById("export-pv-csv")!.addEventListener("click", async () => {
   if (!lastPv) {
     setStatus("먼저 PV 분석을 실행하세요.");
     return;
@@ -878,14 +879,20 @@ document.getElementById("export-pv-csv")!.addEventListener("click", () => {
   // BOM을 붙여 엑셀에서 한글이 깨지지 않게 한다
   const csv =
     "\ufeff" + pvResultToCsv(lastPv, project.buildings, project.site.northAngle);
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `pv_relative_${project.analysis.date.slice(0, 4)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-  setStatus(`CSV 내보냄 — ${lastPv.cells.length}셀 (좌표·법선·직달시간·유효량·상대효율)`);
+  const outcome = await shareOrDownloadText(
+    csv,
+    `pv_relative_${project.analysis.date.slice(0, 4)}.csv`,
+    "text/csv;charset=utf-8",
+    "arch_view PV 분석",
+  );
+  if (outcome === "cancelled") {
+    setStatus("공유 취소됨");
+    return;
+  }
+  setStatus(
+    `CSV ${outcome === "shared" ? "공유함" : "내보냄"} — ${lastPv.cells.length}셀 ` +
+      `(좌표·법선·직달시간·유효량·상대효율)`,
+  );
 });
 
 // ---------- 태양광(PV) 절대평가 — TMY 기상데이터 (M5) ----------
@@ -1576,8 +1583,8 @@ document.getElementById("export-xlsx")!.addEventListener("click", async () => {
     // 엑셀 라이브러리(xlsx-js-style)는 400KB대라 초기 로드에 포함하지 않고
     // 내보내기를 누른 시점에만 받아온다 — 태블릿 첫 진입 속도에 크게 영향
     setStatus("엑셀 모듈 불러오는 중…");
-    const { exportXlsx } = await import("./excel");
-    const filename = exportXlsx(
+    const { buildXlsxBlob, xlsxFilename, XLSX_MIME } = await import("./excel");
+    const blob = buildXlsxBlob(
       project,
       lastSunHours,
       lastNorthSetback,
@@ -1587,9 +1594,19 @@ document.getElementById("export-xlsx")!.addEventListener("click", async () => {
       lastSunHoursMap,
       lastLbm,
     );
+    const filename = xlsxFilename();
+    const outcome = await shareOrDownload(
+      new File([blob], filename, { type: XLSX_MIME }),
+      "arch_view 배치검토",
+    );
+    if (outcome === "cancelled") {
+      setStatus("공유 취소됨");
+      return;
+    }
     const t = siteUnitTotals(project.buildings);
     setStatus(
-      `엑셀 내보냄 — ${filename} (배치 개요 · 일조권 · 정북사선 · PV · 바람길 · LBM · 일조시간, 총 ${t.total}세대)`,
+      `엑셀 ${outcome === "shared" ? "공유함" : "내보냄"} — ${filename} ` +
+        `(배치 개요 · 일조권 · 정북사선 · PV · 바람길 · LBM · 일조시간, 총 ${t.total}세대)`,
     );
   } catch (err) {
     setStatus(`엑셀 내보내기 실패: ${(err as Error).message}`);
@@ -1599,29 +1616,28 @@ document.getElementById("export-xlsx")!.addEventListener("click", async () => {
 
 // ---------- DXF 배치도 내보내기 / .view 프로젝트 저장·불러오기 ----------
 
-/** 텍스트를 파일로 다운로드 (DXF·.view 공용) */
-function downloadText(text: string, filename: string, mime: string): void {
-  const blob = new Blob([text], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-document.getElementById("export-dxf")!.addEventListener("click", () => {
+document.getElementById("export-dxf")!.addEventListener("click", async () => {
   if (!hasExportContent(project)) {
     setStatus("내보낼 배치가 없습니다 — 먼저 DXF를 불러오거나 주동을 배치하세요.");
     return;
   }
   const text = buildDxfText(project, sceneOrigin);
   const filename = `arch_view_배치도_${new Date().toISOString().slice(0, 10)}.dxf`;
-  downloadText(text, filename, "application/dxf");
+  const outcome = await shareOrDownloadText(
+    text,
+    filename,
+    "application/dxf",
+    "arch_view 배치도",
+  );
+  if (outcome === "cancelled") {
+    setStatus("공유 취소됨");
+    return;
+  }
   const plan = project.buildings.filter((b) => b.type === "계획주동").length;
   const adj = project.buildings.length - plan;
   setStatus(
-    `DXF 내보냄 — ${filename} (계획주동 ${plan}동 · 인접건물 ${adj}동 · ` +
+    `DXF ${outcome === "shared" ? "공유함" : "내보냄"} — ${filename} ` +
+      `(계획주동 ${plan}동 · 인접건물 ${adj}동 · ` +
       `오버레이 ${project.siteOverlays.length}개, mm 단위 R12)`,
   );
 });
@@ -1638,13 +1654,23 @@ function syncAllSettings(): void {
   project.site.siteAreaM2 = Math.max(0, parseFloat(siteAreaInput.value) || 0);
 }
 
-document.getElementById("save-view")!.addEventListener("click", () => {
+document.getElementById("save-view")!.addEventListener("click", async () => {
   syncAllSettings();
   const json = serializeView(project, sceneOrigin, { dxfLoadSeq, sceneSeq });
   const filename = `arch_view_${new Date().toISOString().slice(0, 10)}.view`;
-  downloadText(json, filename, "application/json");
+  const outcome = await shareOrDownloadText(
+    json,
+    filename,
+    "application/json",
+    "arch_view 프로젝트",
+  );
+  if (outcome === "cancelled") {
+    setStatus("공유 취소됨");
+    return;
+  }
   setStatus(
-    `프로젝트 저장 — ${filename} (장면 ${project.buildings.length}동 · ` +
+    `프로젝트 ${outcome === "shared" ? "공유함" : "저장"} — ${filename} ` +
+      `(장면 ${project.buildings.length}동 · ` +
       `라이브러리 ${project.buildingLibrary.length}동 · 분석 설정 포함)`,
   );
 });
@@ -2008,6 +2034,27 @@ canvas.addEventListener("pointerup", (e) => {
     selectBuilding(group ? (group.userData.buildingId as string) : null);
   }
   downPos = null;
+});
+
+// ---------- 표준 시점 버튼 (캔버스 우상단) ----------
+
+for (const btn of document.querySelectorAll<HTMLButtonElement>("#view-presets [data-view]")) {
+  btn.addEventListener("click", () => {
+    const preset = btn.dataset.view as ViewPreset;
+    viewer.setViewPreset(preset);
+    // 마지막으로 고른 시점을 표시 — 회전하면 어긋나지만 "어디서 왔는지" 단서가 된다
+    for (const other of document.querySelectorAll("#view-presets [data-view]")) {
+      other.classList.toggle("active", other === btn);
+    }
+    setStatus(`시점: ${VIEW_PRESET_LABEL[preset]}`);
+  });
+}
+
+// 사용자가 직접 회전·이동하면 프리셋 표시를 해제 (더 이상 그 시점이 아니므로)
+viewer.controls.addEventListener("start", () => {
+  for (const b of document.querySelectorAll("#view-presets [data-view]")) {
+    b.classList.remove("active");
+  }
 });
 
 refreshList();

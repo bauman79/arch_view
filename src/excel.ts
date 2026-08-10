@@ -479,6 +479,42 @@ export function buildWorkbook(
   return wb;
 }
 
+/** 내보내기 파일명 — 날짜별로 구분 */
+export function xlsxFilename(now: Date = new Date()): string {
+  return `arch_view_배치검토_${now.toISOString().slice(0, 10)}.xlsx`;
+}
+
+export const XLSX_MIME =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+/**
+ * 통합문서를 Blob으로 — 다운로드뿐 아니라 공유 시트(share.ts)로도 넘길 수 있게
+ * XLSX.writeFile(직접 다운로드) 대신 바이트를 반환한다.
+ */
+export function buildXlsxBlob(
+  project: Project,
+  sunHours: SunHoursResult | null,
+  northSetback: NorthSetbackResult | null,
+  pv: PvResult | null,
+  pvEnergy: PvEnergyResult | null = null,
+  wind: WindResult | null = null,
+  sunHoursMap: SunHoursMapResult | null = null,
+  lbm: LbmResult | null = null,
+): Blob {
+  const wb = buildWorkbook(
+    project,
+    sunHours,
+    northSetback,
+    pv,
+    pvEnergy,
+    wind,
+    sunHoursMap,
+    lbm,
+  );
+  const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
+  return new Blob([bytes], { type: XLSX_MIME });
+}
+
 /** 브라우저 다운로드 */
 export function exportXlsx(
   project: Project,
@@ -500,7 +536,7 @@ export function exportXlsx(
     sunHoursMap,
     lbm,
   );
-  const filename = `arch_view_배치검토_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const filename = xlsxFilename();
   XLSX.writeFile(wb, filename);
   return filename;
 }

@@ -1,6 +1,32 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
+/** 표준 시점 프리셋 — 태블릿에서 두 손가락으로 각도를 맞추기 어려운 점을 보완 */
+export type ViewPreset = "iso" | "top" | "south" | "east" | "west";
+
+export const VIEW_PRESET_LABEL: Record<ViewPreset, string> = {
+  iso: "아이소",
+  top: "평면",
+  south: "남측",
+  east: "동측",
+  west: "서측",
+};
+
+/**
+ * 프리셋별 카메라 방향(장면 중심 → 카메라). three 좌표계에서 +z가 남쪽이다.
+ *
+ * top(평면)은 정확히 수직(0,1,0)으로 두면 카메라 up 벡터와 평행해져 OrbitControls가
+ * 짐벌락에 걸리므로 남쪽으로 아주 조금 눕혀 둔다.
+ * 입면 시점들도 완전 수평(y=0)이면 지면이 선으로만 보여 방향을 잃기 쉬워 살짝 내려다본다.
+ */
+const VIEW_PRESET_DIR: Record<ViewPreset, THREE.Vector3> = {
+  iso: new THREE.Vector3(0.7, 0.8, 1),
+  top: new THREE.Vector3(0, 1, 0.02),
+  south: new THREE.Vector3(0, 0.25, 1),
+  east: new THREE.Vector3(1, 0.25, 0),
+  west: new THREE.Vector3(-1, 0.25, 0),
+};
+
 /**
  * Three.js 뷰포트. DXF XY 평면(Y+=북) → Three.js에서는
  * x=동, y=높이(상), z=-북 으로 매핑한다.
@@ -126,24 +152,41 @@ export class Viewer {
     this.scene.add(north);
   }
 
-  /** 건물 + 오버레이(대지경계 등) + 지형 전체 바운딩 박스에 맞춰 카메라를 이동 */
-  fitToBuildings(): void {
+  /** 건물 + 오버레이(대지경계 등) + 지형 전체를 감싸는 박스 — 비어 있으면 null */
+  private sceneBox(): THREE.Box3 | null {
     const box = new THREE.Box3().setFromObject(this.buildingsRoot);
     const overlayBox = new THREE.Box3().setFromObject(this.overlaysRoot);
     if (!overlayBox.isEmpty()) box.union(overlayBox);
     const terrainBox = new THREE.Box3().setFromObject(this.terrainRoot);
     if (!terrainBox.isEmpty()) box.union(terrainBox);
-    if (box.isEmpty()) return;
+    return box.isEmpty() ? null : box;
+  }
+
+  /** 건물 + 오버레이(대지경계 등) + 지형 전체 바운딩 박스에 맞춰 카메라를 이동 */
+  fitToBuildings(): void {
+    this.setViewPreset("iso");
+  }
+
+  /**
+   * 표준 시점으로 카메라 이동 — 장면 전체가 화면에 들어오도록 거리도 함께 맞춘다.
+   *
+   * 좌표 규약: three x=동, y=높이, z=-북 (즉 +z가 남쪽).
+   * "남측 입면"은 남쪽(+z)에서 북쪽을 바라보는 시점이다.
+   */
+  setViewPreset(preset: ViewPreset): void {
+    const box = this.sceneBox();
+    if (!box) return;
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(size.x, size.z, size.y) * 0.9 + 20;
+
+    const dir = VIEW_PRESET_DIR[preset].clone().normalize();
     this.controls.target.copy(center);
-    this.camera.position.set(
-      center.x + radius * 0.7,
-      center.y + radius * 0.8,
-      center.z + radius,
-    );
+    this.camera.position
+      .copy(center)
+      .addScaledVector(dir, radius * (preset === "iso" ? 1.35 : 1.25));
     this.camera.updateProjectionMatrix();
+    this.controls.update();
   }
 
   private onResize(): void {
