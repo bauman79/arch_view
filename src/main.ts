@@ -41,7 +41,7 @@ import {
 } from "./pv";
 // exportXlsx는 xlsx-js-style(대용량)을 끌고 오므로 클릭 시점 동적 import로 로드한다
 import { buildDxfText, hasExportContent } from "./dxfexport";
-import { deserializeView, serializeView } from "./viewfile";
+import { deserializeView, serializeView, type ViewFileData } from "./viewfile";
 import { EPW_FILES, parseEpw, type EpwData } from "./epw";
 import {
   createPvEnergyOverlay,
@@ -49,6 +49,7 @@ import {
   type PvEnergyResult,
 } from "./pvenergy";
 import {
+  coverageStats,
   createTemplateBuilding,
   DEFAULT_UNITS_PER_FLOOR,
   MASS_TYPE_LABEL,
@@ -120,12 +121,22 @@ import {
   renderSunHoursSummary,
   renderWindSummary,
   renderLbmSummary,
+  renderSchemeList,
+  renderCompareTable,
   setStatus,
   type BuildingStatus,
 } from "./ui";
 import { initShell, notifyRightPanel } from "./shell";
 import { isDrag } from "./pointer";
 import { shareOrDownload, shareOrDownloadText } from "./share";
+import {
+  deleteScheme,
+  formatSavedAt,
+  listSchemes,
+  saveScheme,
+  type CheckTally,
+  type SchemeMetrics,
+} from "./schemes";
 
 // PWA 서비스워커 등록 (빌드에서만 활성 — dev에서는 no-op)
 registerSW({ immediate: true });
@@ -1687,39 +1698,48 @@ function applyProjectToInputs(): void {
   sunHoursStepInput.value = String(project.analysis.sunHours.timeStep);
 }
 
+/**
+ * .view 데이터를 현재 프로젝트에 적용하고 장면을 다시 만든다.
+ * 파일(.view 열기)과 저장된 배치안 불러오기가 같은 경로를 타도록 분리해 둔 함수 —
+ * 한쪽만 고쳐서 복원 결과가 갈라지는 일을 막는다.
+ */
+function applyViewData(d: ViewFileData): void {
+  project.site = d.site;
+  project.analysis = d.analysis;
+  project.buildings = d.buildings;
+  project.buildingLibrary = d.buildingLibrary;
+  project.siteOverlays = d.siteOverlays;
+  project.terrainPoints = d.terrainPoints;
+  sceneOrigin = d.sceneOrigin;
+  // id 카운터는 이어서 발급 — 복원된 건물과 새 건물의 id 충돌 방지
+  dxfLoadSeq = Math.max(dxfLoadSeq, d.counters.dxfLoadSeq);
+  sceneSeq = Math.max(sceneSeq, d.counters.sceneSeq);
+  cloneOrigin.clear();
+  libraryCheckedIds.clear();
+  for (const b of project.buildingLibrary) libraryCheckedIds.add(b.id);
+  selectedId = null;
+
+  applyProjectToInputs();
+  rebuildTerrain(); // rebuildAll보다 먼저 — 건물 G.L. 계산이 terrainModel을 참조
+  rebuildAll();
+  rebuildOverlays();
+  viewer.fitToBuildings();
+  refreshList();
+  refreshLibraryList();
+  updateRotationHandle();
+  invalidateAnalysis();
+  updateSetbackChecks();
+  updateSiteTotals();
+  updateSunFromSlider();
+}
+
 document.getElementById("view-file")!.addEventListener("change", async (e) => {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
   if (!file) return;
   try {
     const d = deserializeView(await file.text());
-    project.site = d.site;
-    project.analysis = d.analysis;
-    project.buildings = d.buildings;
-    project.buildingLibrary = d.buildingLibrary;
-    project.siteOverlays = d.siteOverlays;
-    project.terrainPoints = d.terrainPoints;
-    sceneOrigin = d.sceneOrigin;
-    // id 카운터는 이어서 발급 — 복원된 건물과 새 건물의 id 충돌 방지
-    dxfLoadSeq = Math.max(dxfLoadSeq, d.counters.dxfLoadSeq);
-    sceneSeq = Math.max(sceneSeq, d.counters.sceneSeq);
-    cloneOrigin.clear();
-    libraryCheckedIds.clear();
-    for (const b of project.buildingLibrary) libraryCheckedIds.add(b.id);
-    selectedId = null;
-
-    applyProjectToInputs();
-    rebuildTerrain(); // rebuildAll보다 먼저 — 건물 G.L. 계산이 terrainModel을 참조
-    rebuildAll();
-    rebuildOverlays();
-    viewer.fitToBuildings();
-    refreshList();
-    refreshLibraryList();
-    updateRotationHandle();
-    invalidateAnalysis();
-    updateSetbackChecks();
-    updateSiteTotals();
-    updateSunFromSlider();
+    applyViewData(d);
     const saved = d.savedAt ? ` (저장 시각 ${d.savedAt.slice(0, 16).replace("T", " ")})` : "";
     const terrainInfo = terrainModel
       ? ` · 지형 로드됨 (고도 범위: ${terrainModel.minZ.toFixed(1)}m ~ ${terrainModel.maxZ.toFixed(1)}m)`
@@ -2035,6 +2055,102 @@ canvas.addEventListener("pointerup", (e) => {
   }
   downPos = null;
 });
+
+// ---------- 배치안 저장·비교 ----------
+
+const schemeNameInput = document.getElementById("scheme-name") as HTMLInputElement;
+const compareModal = document.getElementById("compare-modal") as HTMLElement;
+
+/**
+ * 지금 화면의 지표를 굳혀 배치안 metrics로 만든다.
+ * 검토 결과는 "실행하지 않음"과 "0건 적합"을 구분해야 하므로,
+ * 결과 객체가 없으면 null(미검토)로 남긴다.
+ */
+function currentSchemeMetrics(): SchemeMetrics {
+  syncAllSettings();
+  const t = siteUnitTotals(project.buildings);
+  const cov = coverageStats(project.buildings, project.site.siteAreaM2);
+  const tally = <T extends { checks: { pass: boolean }[] }>(
+    r: T | null,
+  ): CheckTally | null =>
+    r ? { pass: r.checks.filter((c) => c.pass).length, total: r.checks.length } : null;
+
+  return {
+    planCount: t.buildingCount,
+    totalUnits: t.total,
+    byType: t.byType.map((u) => ({ unitType: u.unitType, count: u.count })),
+    coverageM2: cov.coverageM2,
+    grossM2: cov.grossM2,
+    bcrPct: cov.bcrPct,
+    farPct: cov.farPct,
+    north: tally(lastNorthSetback),
+    daylight: tally(lastDaylight),
+    spacing: tally(lastSpacing),
+  };
+}
+
+function refreshSchemeList(): void {
+  renderSchemeList(listSchemes(), {
+    onLoad: (rec) => {
+      try {
+        applyViewData(deserializeView(rec.view));
+        setStatus(
+          `배치안 "${rec.name}" 불러옴 — 장면 ${project.buildings.length}동 · ` +
+            `${rec.metrics.totalUnits}세대 (저장 ${formatSavedAt(rec.savedAt)})`,
+        );
+      } catch (err) {
+        setStatus(`배치안 불러오기 실패: ${(err as Error).message}`);
+        console.error(err);
+      }
+    },
+    onDelete: (rec) => {
+      deleteScheme(rec.id);
+      refreshSchemeList();
+      setStatus(`배치안 "${rec.name}" 삭제됨`);
+    },
+  });
+}
+
+document.getElementById("save-scheme")!.addEventListener("click", () => {
+  if (project.buildings.length === 0) {
+    setStatus("저장할 배치가 없습니다 — 먼저 주동을 배치하세요.");
+    return;
+  }
+  // 이름을 비워두면 "A안, B안 …"으로 자동 부여
+  const auto = `${String.fromCharCode(65 + (listSchemes().length % 26))}안`;
+  const name = schemeNameInput.value.trim() || auto;
+  try {
+    const view = serializeView(project, sceneOrigin, { dxfLoadSeq, sceneSeq });
+    const rec = saveScheme(name, currentSchemeMetrics(), view);
+    schemeNameInput.value = "";
+    refreshSchemeList();
+    setStatus(
+      `배치안 "${rec.name}" 저장됨 — ${rec.metrics.planCount}동 · ${rec.metrics.totalUnits}세대 ` +
+        `(브라우저 저장 · 영구 보관은 "파일 → 프로젝트 저장")`,
+    );
+  } catch (err) {
+    setStatus(`배치안 저장 실패: ${(err as Error).message}`);
+  }
+});
+
+document.getElementById("compare-schemes")!.addEventListener("click", () => {
+  renderCompareTable(listSchemes());
+  compareModal.hidden = false;
+});
+
+document.getElementById("close-compare")!.addEventListener("click", () => {
+  compareModal.hidden = true;
+});
+
+compareModal.addEventListener("click", (e) => {
+  if (e.target === compareModal) compareModal.hidden = true;
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !compareModal.hidden) compareModal.hidden = true;
+});
+
+refreshSchemeList();
 
 // ---------- 표준 시점 버튼 (캔버스 우상단) ----------
 

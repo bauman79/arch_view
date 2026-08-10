@@ -18,6 +18,14 @@ import type { SunHoursMapResult } from "./sunhoursmap";
 import { windDirLabel, type WindResult } from "./wind";
 import type { LbmResult } from "./lbm";
 import { buildingHeight, mirrorLabel, type Building } from "./types";
+import {
+  formatSavedAt,
+  maxOf,
+  tallyLabel,
+  type CheckTally,
+  type SchemeMetrics,
+  type SchemeRecord,
+} from "./schemes";
 
 export interface UiCallbacks {
   onParamsChange(b: Building): void;
@@ -1267,4 +1275,179 @@ function labelWrap(text: string, input: HTMLInputElement): HTMLLabelElement {
   const label = document.createElement("label");
   label.append(text, input);
   return label;
+}
+
+// ---------- 배치안 저장·비교 ----------
+
+/**
+ * 좌측 패널 배치안 목록. 이름은 사용자 입력이라 innerHTML 대신 DOM 생성으로 넣는다.
+ */
+export function renderSchemeList(
+  schemes: SchemeRecord[],
+  cb: {
+    onLoad(rec: SchemeRecord): void;
+    onDelete(rec: SchemeRecord): void;
+  },
+): void {
+  const host = document.getElementById("scheme-list");
+  if (!host) return;
+  host.innerHTML = "";
+  if (schemes.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "저장된 배치안이 없습니다.";
+    host.appendChild(p);
+    return;
+  }
+  for (const rec of schemes) {
+    const row = document.createElement("div");
+    row.className = "scheme-row";
+
+    const info = document.createElement("div");
+    info.className = "scheme-info";
+    const name = document.createElement("div");
+    name.className = "scheme-name";
+    name.textContent = rec.name;
+    const meta = document.createElement("div");
+    meta.className = "scheme-meta";
+    const far =
+      rec.metrics.farPct === null ? "" : ` · 용적률 ${rec.metrics.farPct.toFixed(0)}%`;
+    meta.textContent =
+      `${rec.metrics.planCount}동 · ${rec.metrics.totalUnits}세대${far} · ` +
+      formatSavedAt(rec.savedAt);
+    info.append(name, meta);
+
+    const loadBtn = document.createElement("button");
+    loadBtn.className = "btn mini";
+    loadBtn.textContent = "불러오기";
+    loadBtn.addEventListener("click", () => cb.onLoad(rec));
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn mini delete-btn";
+    delBtn.textContent = "삭제";
+    delBtn.addEventListener("click", () => cb.onDelete(rec));
+
+    row.append(info, loadBtn, delBtn);
+    host.appendChild(row);
+  }
+}
+
+/** 비교표 한 행 — 지표 하나를 배치안별로 늘어놓는다 */
+function compareRow(
+  table: HTMLTableSectionElement,
+  label: string,
+  schemes: SchemeRecord[],
+  render: (m: SchemeMetrics) => { text: string; value?: number | null; cls?: string },
+  best: number | null,
+): void {
+  const tr = document.createElement("tr");
+  const th = document.createElement("td");
+  th.textContent = label;
+  tr.appendChild(th);
+  for (const rec of schemes) {
+    const td = document.createElement("td");
+    const r = render(rec.metrics);
+    td.textContent = r.text;
+    if (r.cls) td.classList.add(r.cls);
+    // 최댓값 강조 — 동률이면 모두 강조한다
+    if (best !== null && r.value !== null && r.value !== undefined && r.value === best) {
+      td.classList.add("best");
+    }
+    tr.appendChild(td);
+  }
+  table.appendChild(tr);
+}
+
+function tallyCell(t: CheckTally | null): { text: string; cls: string } {
+  if (!t || t.total === 0) return { text: "미검토", cls: "na" };
+  return { text: tallyLabel(t), cls: t.pass === t.total ? "pass" : "fail" };
+}
+
+/** 배치안 비교표를 모달 본문에 그린다 */
+export function renderCompareTable(schemes: SchemeRecord[]): void {
+  const host = document.getElementById("compare-body");
+  if (!host) return;
+  host.innerHTML = "";
+  if (schemes.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "저장된 배치안이 없습니다 — 먼저 현재 배치를 저장하세요.";
+    host.appendChild(p);
+    return;
+  }
+
+  const scroll = document.createElement("div");
+  scroll.className = "compare-scroll";
+  const table = document.createElement("table");
+  table.className = "compare-table";
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  const corner = document.createElement("th");
+  corner.textContent = "항목";
+  headRow.appendChild(corner);
+  for (const rec of schemes) {
+    const th = document.createElement("th");
+    th.textContent = rec.name;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  compareRow(tbody, "계획주동", schemes, (m) => ({
+    text: `${m.planCount}동`,
+    value: m.planCount,
+  }), maxOf(schemes, (m) => m.planCount));
+
+  compareRow(tbody, "총 세대수", schemes, (m) => ({
+    text: `${m.totalUnits}세대`,
+    value: m.totalUnits,
+  }), maxOf(schemes, (m) => m.totalUnits));
+
+  compareRow(tbody, "연면적", schemes, (m) => ({
+    text: `${m.grossM2.toFixed(0)}㎡`,
+    value: m.grossM2,
+  }), maxOf(schemes, (m) => m.grossM2));
+
+  compareRow(tbody, "건폐율", schemes, (m) => ({
+    text: m.bcrPct === null ? "—" : `${m.bcrPct.toFixed(1)}%`,
+    value: m.bcrPct,
+    cls: m.bcrPct === null ? "na" : undefined,
+  }), null); // 건폐율은 클수록 좋은 값이 아니므로 강조하지 않는다
+
+  compareRow(tbody, "용적률", schemes, (m) => ({
+    text: m.farPct === null ? "—" : `${m.farPct.toFixed(1)}%`,
+    value: m.farPct,
+    cls: m.farPct === null ? "na" : undefined,
+  }), maxOf(schemes, (m) => m.farPct));
+
+  for (const [label, pick] of [
+    ["정북사선", (m: SchemeMetrics) => m.north],
+    ["채광사선", (m: SchemeMetrics) => m.daylight],
+    ["인동거리", (m: SchemeMetrics) => m.spacing],
+  ] as const) {
+    compareRow(tbody, label, schemes, (m) => {
+      const c = tallyCell(pick(m));
+      return { text: c.text, value: null, cls: c.cls };
+    }, null);
+  }
+
+  compareRow(tbody, "저장", schemes, () => ({ text: "", value: null }), null);
+  // 저장 시각 행은 metrics가 아니라 레코드에서 오므로 직접 채운다
+  const savedRow = tbody.lastElementChild!;
+  schemes.forEach((rec, i) => {
+    (savedRow.children[i + 1] as HTMLElement).textContent = formatSavedAt(rec.savedAt);
+  });
+
+  table.appendChild(tbody);
+  scroll.appendChild(table);
+  host.appendChild(scroll);
+
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.style.marginTop = "10px";
+  note.textContent =
+    "앰버 = 해당 지표 최댓값. 법규 검토는 저장 시점 결과이며, 채광·인동은 토글을 켜고 저장해야 값이 남습니다.";
+  host.appendChild(note);
 }
