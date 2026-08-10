@@ -2,6 +2,21 @@ import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  build: {
+    rollupOptions: {
+      output: {
+        /**
+         * 전부 한 청크(1.35MB)로 묶이면 앱 코드가 한 줄만 바뀌어도 three.js까지
+         * 통째로 다시 받는다 — 태블릿 셀룰러에서 업데이트 비용이 크다.
+         * 거의 바뀌지 않는 의존성을 갈라 두면 앱 갱신 시 캐시가 그대로 재사용된다.
+         */
+        manualChunks: {
+          three: ["three"],
+          vendor: ["dxf-parser", "delaunator", "suncalc"],
+        },
+      },
+    },
+  },
   plugins: [
     VitePWA({
       // 캐시 전략을 직접 제어하기 위해 커스텀 서비스워커(src/sw.ts) 주입 방식 사용

@@ -39,7 +39,7 @@ import {
   runPvAnalysis,
   type PvResult,
 } from "./pv";
-import { exportXlsx } from "./excel";
+// exportXlsx는 xlsx-js-style(대용량)을 끌고 오므로 클릭 시점 동적 import로 로드한다
 import { buildDxfText, hasExportContent } from "./dxfexport";
 import { deserializeView, serializeView } from "./viewfile";
 import { EPW_FILES, parseEpw, type EpwData } from "./epw";
@@ -124,6 +124,7 @@ import {
   type BuildingStatus,
 } from "./ui";
 import { initShell, notifyRightPanel } from "./shell";
+import { isDrag } from "./pointer";
 
 // PWA 서비스워커 등록 (빌드에서만 활성 — dev에서는 no-op)
 registerSW({ immediate: true });
@@ -1565,26 +1566,35 @@ function updateSiteTotals(): void {
 
 siteAreaInput.addEventListener("change", updateSiteTotals);
 
-document.getElementById("export-xlsx")!.addEventListener("click", () => {
+document.getElementById("export-xlsx")!.addEventListener("click", async () => {
   if (project.buildings.length === 0) {
     setStatus("먼저 DXF를 불러오거나 주동을 추가하세요.");
     return;
   }
   updateSiteTotals();
-  const filename = exportXlsx(
-    project,
-    lastSunHours,
-    lastNorthSetback,
-    lastPv,
-    lastPvEnergy,
-    lastWind,
-    lastSunHoursMap,
-    lastLbm,
-  );
-  const t = siteUnitTotals(project.buildings);
-  setStatus(
-    `엑셀 내보냄 — ${filename} (배치 개요 · 일조권 · 정북사선 · PV · 바람길 · LBM · 일조시간, 총 ${t.total}세대)`,
-  );
+  try {
+    // 엑셀 라이브러리(xlsx-js-style)는 400KB대라 초기 로드에 포함하지 않고
+    // 내보내기를 누른 시점에만 받아온다 — 태블릿 첫 진입 속도에 크게 영향
+    setStatus("엑셀 모듈 불러오는 중…");
+    const { exportXlsx } = await import("./excel");
+    const filename = exportXlsx(
+      project,
+      lastSunHours,
+      lastNorthSetback,
+      lastPv,
+      lastPvEnergy,
+      lastWind,
+      lastSunHoursMap,
+      lastLbm,
+    );
+    const t = siteUnitTotals(project.buildings);
+    setStatus(
+      `엑셀 내보냄 — ${filename} (배치 개요 · 일조권 · 정북사선 · PV · 바람길 · LBM · 일조시간, 총 ${t.total}세대)`,
+    );
+  } catch (err) {
+    setStatus(`엑셀 내보내기 실패: ${(err as Error).message}`);
+    console.error(err);
+  }
 });
 
 // ---------- DXF 배치도 내보내기 / .view 프로젝트 저장·불러오기 ----------
@@ -1804,12 +1814,21 @@ interface DragState {
   group: THREE.Group;
   startHit: THREE.Vector3;
   startOffset: { dx: number; dy: number };
+  /** 탭 임계값을 넘어 실제로 끌었는지 — false면 클릭/탭이므로 배치를 건드리지 않는다 */
+  moved: boolean;
 }
 interface RotateState {
   building: Building;
   group: THREE.Group;
   /** 직전 포인터 각도 (라디안, DXF 평면) */
   lastAngle: number;
+  /** DragState.moved와 동일한 의미 */
+  moved: boolean;
+}
+
+/** pointerdown 지점에서 탭 임계값을 넘어 움직였는가 (= 드래그로 볼 것인가) */
+function pastTapSlop(e: PointerEvent): boolean {
+  return isDrag(e.pointerType, downPos, { x: e.clientX, y: e.clientY });
 }
 let drag: DragState | null = null;
 let rotate: RotateState | null = null;
@@ -1871,6 +1890,7 @@ canvas.addEventListener("pointerdown", (e) => {
         building: planB,
         group: groups.get(planB.id)!,
         lastAngle: pointerAngle(planB, hit),
+        moved: false,
       };
       viewer.controls.enabled = false;
       try {
@@ -1896,6 +1916,7 @@ canvas.addEventListener("pointerdown", (e) => {
     group,
     startHit: hit,
     startOffset: { ...b.offset },
+    moved: false,
   };
   viewer.controls.enabled = false;
   try {
@@ -1913,6 +1934,8 @@ canvas.addEventListener("pointermove", (e) => {
       : "";
   }
   if (rotate) {
+    if (!rotate.moved && !pastTapSlop(e)) return;
+    rotate.moved = true;
     const hit = groundHit(e);
     if (!hit) return;
     const cur = pointerAngle(rotate.building, hit);
@@ -1930,6 +1953,10 @@ canvas.addEventListener("pointermove", (e) => {
     return;
   }
   if (!drag) return;
+  // 탭 임계값 안의 흔들림은 이동으로 치지 않는다 — 선택하려고 클릭/탭했을 뿐인데
+  // 배치가 미세하게 밀리고 invalidateAnalysis()로 PV·일조권 결과가 날아가던 문제
+  if (!drag.moved && !pastTapSlop(e)) return;
+  drag.moved = true;
   const hit = groundHit(e);
   if (!hit) return;
   // three 좌표 → DXF 평면: dx = Δx, dy = -Δz
@@ -1945,9 +1972,12 @@ canvas.addEventListener("pointermove", (e) => {
 
 canvas.addEventListener("pointerup", (e) => {
   if (rotate) {
-    setStatus(
-      `${rotate.building.name} 회전: ${rotate.building.offset.rotation.toFixed(1)}°`,
-    );
+    // 실제로 돌렸을 때만 보고 — 핸들을 스치기만 해도 "회전 0.0°"가 뜨던 오보 방지
+    if (rotate.moved) {
+      setStatus(
+        `${rotate.building.name} 회전: ${rotate.building.offset.rotation.toFixed(1)}°`,
+      );
+    }
     rotate = null;
     viewer.controls.enabled = true;
     try {
@@ -1959,9 +1989,11 @@ canvas.addEventListener("pointerup", (e) => {
     return;
   }
   if (drag) {
-    setStatus(
-      `${drag.building.name} 이동: (${drag.building.offset.dx.toFixed(1)}, ${drag.building.offset.dy.toFixed(1)})m`,
-    );
+    if (drag.moved) {
+      setStatus(
+        `${drag.building.name} 이동: (${drag.building.offset.dx.toFixed(1)}, ${drag.building.offset.dy.toFixed(1)})m`,
+      );
+    }
     drag = null;
     viewer.controls.enabled = true;
     try {
@@ -1970,14 +2002,8 @@ canvas.addEventListener("pointerup", (e) => {
       /* noop */
     }
   }
-  // 드래그가 아닌 짧은 클릭이면 선택 처리.
-  // 손가락은 마우스보다 훨씬 흔들리므로(탭 중 5~10px 이동은 정상) 터치는 임계값을 키운다 —
-  // 4px 고정이면 태블릿에서 건물 선택이 자주 무시된다.
-  const tapSlop = e.pointerType === "mouse" ? 4 : 12;
-  if (
-    downPos &&
-    Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) < tapSlop
-  ) {
+  // 드래그가 아닌 짧은 클릭/탭이면 선택 처리
+  if (!pastTapSlop(e)) {
     const group = pickBuilding(e);
     selectBuilding(group ? (group.userData.buildingId as string) : null);
   }
