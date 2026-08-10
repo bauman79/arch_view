@@ -123,9 +123,13 @@ import {
   setStatus,
   type BuildingStatus,
 } from "./ui";
+import { initShell, notifyRightPanel } from "./shell";
 
 // PWA 서비스워커 등록 (빌드에서만 활성 — dev에서는 no-op)
 registerSW({ immediate: true });
+
+// 반응형 셸(드로어·툴바 메뉴·경고 모달) 배선 — 3D/분석 로직과 독립
+initShell();
 
 const project: Project = defaultProject();
 const viewer = new Viewer(document.getElementById("viewport")!);
@@ -332,6 +336,8 @@ function selectBuilding(id: string | null): void {
   if (id && groups.has(id)) setSelected(groups.get(id)!, true);
   refreshList();
   updateRotationHandle();
+  // 드로어 모드에서 우측 상세 패널이 접혀 있으면 툴바 "결과" 버튼에 갱신 표시
+  if (id) notifyRightPanel();
 }
 
 /**
@@ -1964,10 +1970,13 @@ canvas.addEventListener("pointerup", (e) => {
       /* noop */
     }
   }
-  // 드래그가 아닌 짧은 클릭이면 선택 처리
+  // 드래그가 아닌 짧은 클릭이면 선택 처리.
+  // 손가락은 마우스보다 훨씬 흔들리므로(탭 중 5~10px 이동은 정상) 터치는 임계값을 키운다 —
+  // 4px 고정이면 태블릿에서 건물 선택이 자주 무시된다.
+  const tapSlop = e.pointerType === "mouse" ? 4 : 12;
   if (
     downPos &&
-    Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) < 4
+    Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) < tapSlop
   ) {
     const group = pickBuilding(e);
     selectBuilding(group ? (group.userData.buildingId as string) : null);
