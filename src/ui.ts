@@ -131,6 +131,7 @@ export function renderBuildingList(
 
   if (plans.length > 0) {
     root.appendChild(sectionHeading(`계획주동 (${plans.length})`));
+    root.appendChild(statusDotLegend());
     for (const b of plans) {
       root.appendChild(
         renderAccordionItem(b, b.id === selectedId, statusMap.get(b.id) ?? emptyBuildingStatus(), cb),
@@ -167,10 +168,62 @@ function sectionHeading(text: string): HTMLElement {
   return h;
 }
 
+/**
+ * 상태 도트 범례 — 카드 헤더의 점 4개가 무엇이고 색이 무슨 뜻인지 알려준다.
+ * 지금까지는 hover 툴팁뿐이라 터치 기기에서는 의미를 알 방법이 아예 없었다.
+ */
+function statusDotLegend(): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "dot-legend";
+
+  const order = document.createElement("div");
+  order.className = "dot-legend-order";
+  for (const [kind, label] of [
+    ["m2", "정북"],
+    ["m3d", "채광"],
+    ["m3s", "인동"],
+    ["sh", "일조"],
+  ] as const) {
+    const item = document.createElement("span");
+    const dot = document.createElement("span");
+    dot.className = `status-dot dot-${kind}`;
+    item.append(dot, document.createTextNode(label));
+    order.appendChild(item);
+  }
+
+  const colors = document.createElement("div");
+  colors.className = "dot-legend-colors";
+  for (const [cls, label] of [
+    ["pass", "적합"],
+    ["fail", "위반"],
+    ["na", "미검토"],
+  ] as const) {
+    const item = document.createElement("span");
+    const dot = document.createElement("span");
+    dot.className = `status-dot ${cls}`;
+    item.append(dot, document.createTextNode(label));
+    colors.appendChild(item);
+  }
+
+  wrap.append(order, colors);
+  return wrap;
+}
+
+const DOT_STATUS_LABEL: Record<DotStatus, string> = {
+  pass: "적합",
+  fail: "위반",
+  na: "미검토",
+};
+
 function dotSpan(kind: "m2" | "m3d" | "m3s" | "sh", status: DotStatus, title: string): HTMLSpanElement {
   const dot = document.createElement("span");
   dot.className = `status-dot dot-${kind} ${status}`;
-  dot.title = title;
+  // 색만으로는 의미를 알 수 없고 title은 hover 전용이라 터치 기기에서 볼 수 없다 —
+  // 스크린리더·접근성 검사용으로 상태 텍스트를 함께 싣는다 (범례는 목록 상단에 표시)
+  const label = `${title}: ${DOT_STATUS_LABEL[status]}`;
+  dot.title = label;
+  dot.setAttribute("role", "img");
+  dot.setAttribute("aria-label", label);
   return dot;
 }
 
@@ -219,7 +272,9 @@ function renderAccordionItem(
   const deleteBtn = document.createElement("button");
   deleteBtn.className = "delete-btn";
   deleteBtn.textContent = "🗑";
-  deleteBtn.title = "장면에서 삭제";
+  // 이모지 하나뿐이라 스크린리더에는 "🗑"으로만 읽힌다 — 어느 건물인지까지 이름에 담는다
+  deleteBtn.title = `${b.name} 장면에서 삭제`;
+  deleteBtn.setAttribute("aria-label", `${b.name} 장면에서 삭제`);
   deleteBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     cb.onDelete(b);

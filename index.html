@@ -201,8 +201,8 @@
         transition: background 0.12s, border-color 0.12s;
       }
 
-      .btn:hover,
-      button:hover {
+      .btn:hover:not(:disabled),
+      button:hover:not(:disabled) {
         background: #eef2f7;
         border-color: #9fb0c4;
       }
@@ -215,8 +215,8 @@
         border-color: #1e2d4a;
       }
 
-      #toolbar .btn:not(.primary):hover,
-      #toolbar button:not(.primary):hover {
+      #toolbar .btn:not(.primary):hover:not(:disabled),
+      #toolbar button:not(.primary):hover:not(:disabled) {
         background: #17233a;
         border-color: #2a3f66;
       }
@@ -229,8 +229,8 @@
         font-weight: 600;
       }
 
-      button.primary:hover,
-      .btn.primary:hover {
+      button.primary:hover:not(:disabled),
+      .btn.primary:hover:not(:disabled) {
         background: #f0a52e;
         border-color: #f0a52e;
       }
@@ -244,6 +244,15 @@
 
       button.toggled:hover {
         background: #d5f2e1;
+      }
+
+      /* 분석 실행 중에는 버튼을 disabled로 잠그는데, 스타일이 없으면 활성과 똑같이
+         보여 "눌리는데 반응 없는" 버튼이 된다 — 상태를 눈에 보이게 한다.
+         (hover 규칙에는 :not(:disabled)를 붙여 잠긴 버튼이 밝아지지 않게 했다) */
+      .btn:disabled,
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
       }
 
       .btn.mini,
@@ -392,14 +401,24 @@
         flex-wrap: wrap;
       }
 
+      /* flex: none이면 체크박스를 감싼 긴 라벨(M9 "법적기준 오버레이 …")이 줄어들지
+         못해 패널 폭을 넘긴다 — 축소는 허용하되 기본 크기는 내용에 맞춘다 */
       .row label {
-        flex: none;
+        flex: 0 1 auto;
+        min-width: 0;
         font-size: 11px;
         color: #5b6b80;
       }
 
       .row input[type="number"] {
         width: 52px;
+      }
+
+      /* 위·경도는 소수 2자리라 52px에서 값이 잘린다 ("126.98"은 content 61px 필요).
+         id 선택자라 터치용 coarse 규칙(68px)보다도 우선한다. */
+      #lat-input,
+      #lng-input {
+        width: 82px;
       }
 
       .mini-label {
@@ -501,6 +520,29 @@
         margin-top: 0;
         padding-top: 0;
         border-top: none;
+      }
+
+      /* 상태 도트 범례 — 점 4개의 순서와 색 의미 (hover 툴팁만으로는 터치에서 못 본다) */
+      .dot-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 3px 10px;
+        font-size: 10px;
+        color: #6e7f94;
+        margin-bottom: 6px;
+      }
+
+      .dot-legend-order,
+      .dot-legend-colors {
+        display: flex;
+        gap: 7px;
+      }
+
+      .dot-legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        white-space: nowrap;
       }
 
       .building-card {
@@ -1347,8 +1389,8 @@
          터치 기기에는 :hover가 없어 hover에만 의존하던 행(라이브러리·아코디언)이
          눌린 느낌을 주지 못했다 — :active와 focus-visible을 함께 정의한다.
          ============================================================ */
-      .btn:active,
-      button:active {
+      .btn:active:not(:disabled),
+      button:active:not(:disabled) {
         transform: translateY(1px);
       }
 
@@ -1443,7 +1485,8 @@
       @media (max-width: 900px) {
         #time-overlay {
           left: 10px;
-          right: 10px;
+          /* 우하단 나침반(36px + 여백 10px) 자리를 비운다 — 폭을 꽉 채우면 겹친다 */
+          right: 56px;
           transform: none;
           justify-content: center;
           flex-wrap: wrap;
@@ -1722,9 +1765,13 @@
           <section class="lp-section">
             <details>
               <summary>대지 위치·격자</summary>
+              <!-- 위도·경도를 한 행에 두면 220px 패널에서 줄바꿈되며 라벨과 값이
+                   분리돼 어느 쪽 값인지 모호해진다 — 한 행에 하나씩 둔다 -->
               <div class="row">
                 <label for="lat-input">위도</label>
                 <input type="number" id="lat-input" value="37.57" step="0.01" min="-90" max="90" />
+              </div>
+              <div class="row">
                 <label for="lng-input">경도</label>
                 <input type="number" id="lng-input" value="126.98" step="0.01" min="-180" max="180" />
               </div>
@@ -1754,7 +1801,9 @@
               <div class="row">
                 <label for="daylight-ratio">채광 H/D ≤</label>
                 <input type="number" id="daylight-ratio" value="2" step="0.1" min="0.1" max="10" />
-                <label for="daylight-roadpark">도로·공원</label>
+              </div>
+              <div class="row">
+                <label for="daylight-roadpark">채광 H/D ≤ (도로·공원)</label>
                 <input type="number" id="daylight-roadpark" value="2" step="0.1" min="0.1" max="10" />
               </div>
               <div class="row">
