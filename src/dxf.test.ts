@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { signedArea } from "./geom2d";
 import { parseDxfBuildings } from "./dxf";
 
 /**
@@ -161,7 +162,10 @@ describe("한 타입 레이어에 다른 형상 혼재 감지", () => {
     [8000, 15000],
     [0, 15000],
   ];
-  const mirroredL = L.map(([x, y]) => [-x, y] as [number, number]);
+  // 원점 기준으로만 미러하면 x=0 변이 원본과 맞닿아 "벽을 맞댄 한 동"으로 합쳐진다.
+  // 이 describe의 관심사는 형상(미러) 판정이므로 떨어뜨려 둔다 — 맞닿은 경우의 동작은
+  // 아래 "벽을 맞댄 폴리곤 병합"에서 따로 검증한다.
+  const mirroredL = L.map(([x, y]) => [-x - 30000, y] as [number, number]);
 
   it("합동인 형상만 있으면 경고 없음", () => {
     const text = dxfText({
@@ -322,5 +326,90 @@ describe("PLAN_WIN/ADJ_WIN 창면 매칭", () => {
     const r = parseDxfBuildings(text, "mm");
     expect(r.buildings[0].windowSegments).toHaveLength(0);
     expect(r.warnings.some((w) => w.includes("PLAN_WIN"))).toBe(true);
+  });
+});
+
+/**
+ * 세대 유니트·코어를 따로 그린 동평면을 한 동으로 합치는 동작.
+ * 판별 기준은 레이어가 아니라 **엣지 공유**다 — 떨어진 폴리곤은 기존대로 여러 동으로 남는다.
+ */
+describe("벽을 맞댄 폴리곤 병합", () => {
+  it("벽을 맞댄 유니트 2개는 한 동으로 합쳐진다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 10000, 10000) +
+        rectEntity("PLAN_A_1", 10000, 0, 20000, 10000),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings).toHaveLength(1);
+    const xs = r.buildings[0].footprint.map((p) => p.x);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(20, 6); // 20m 한 덩어리
+    expect(r.warnings.some((w) => w.includes("합쳤습니다"))).toBe(true);
+  });
+
+  it("유니트 3개 + 코어가 붙은 동평면 → 1동 (면적 보존)", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 10000, 10000) +
+        rectEntity("PLAN_A_1", 10000, 0, 20000, 10000) +
+        rectEntity("PLAN_A_1", 20000, 0, 30000, 10000) +
+        rectEntity("PLAN_A_1", 10000, 10000, 20000, 16000), // 코어(위에 붙음)
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings).toHaveLength(1);
+    expect(Math.abs(signedArea(r.buildings[0].footprint))).toBeCloseTo(360, 6);
+  });
+
+  it("떨어진 폴리곤은 합치지 않는다 — 여러 동 배치 규약 유지 (회귀)", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 10000, 10000) +
+        rectEntity("PLAN_A_1", 20000, 0, 30000, 10000),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings).toHaveLength(2);
+    expect(r.warnings.some((w) => w.includes("합쳤습니다"))).toBe(false);
+  });
+
+  it("맞댄 덩어리와 떨어진 동이 섞여 있어도 각각 처리된다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 10000, 10000) +
+        rectEntity("PLAN_A_1", 10000, 0, 20000, 10000) + // 위와 맞닿음
+        rectEntity("PLAN_A_1", 50000, 0, 60000, 10000), // 별개 동
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings).toHaveLength(2);
+  });
+
+  it("합쳐진 외곽선 위의 PLAN_WIN이 그대로 창면으로 매칭된다", () => {
+    // 두 유니트가 맞닿아 20m 동이 되고, 남측 외벽 전체에 창면 표시
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 10000, 10000) +
+        rectEntity("PLAN_A_1", 10000, 0, 20000, 10000) +
+        lineEntity("PLAN_WIN", 0, 0, 10000, 0) +
+        lineEntity("PLAN_WIN", 10000, 0, 20000, 0),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings).toHaveLength(1);
+    expect(r.buildings[0].windowSegments).toHaveLength(2);
+    expect(r.warnings.some((w) => w.includes("어떤 건물 외곽선 위에도"))).toBe(false);
+  });
+
+  it("서로 다른 타입은 레이어로 나누면 각각 1동이 된다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 10000, 10000) +
+        rectEntity("PLAN_A_1", 10000, 0, 20000, 10000) +
+        rectEntity("PLAN_B_1", 40000, 0, 50000, 12000) +
+        rectEntity("PLAN_B_1", 50000, 0, 60000, 12000),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings).toHaveLength(2);
+    expect(r.buildings.map((b) => b.name).sort()).toEqual([
+      "계획주동_A_1",
+      "계획주동_B_1",
+    ]);
   });
 });

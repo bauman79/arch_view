@@ -3,6 +3,7 @@ import { FixedLwpolylineParser } from "./dxf-lwpolyline";
 import { signedArea } from "./geom2d";
 import { defaultUnitMix } from "./massing";
 import { extractContourPoints, isContourLayer } from "./terrain";
+import { unionAdjacentPolygons } from "./polyunion";
 import { segmentLiesOnEdge, WINDOW_MATCH_TOLERANCE } from "./windows";
 import type {
   Building,
@@ -157,6 +158,57 @@ export function unitSourceLabel(source: UnitSource): string {
     case "manual-m":
       return "수동 지정: m";
   }
+}
+
+/**
+ * 같은 레이어 안에서 **벽을 맞댄** 폴리곤들을 한 동으로 합친다.
+ *
+ * 실무 동평면은 세대 유니트와 코어를 각각 닫힌 폴리라인으로 그려 벽을 맞대는 경우가 많다.
+ * 그대로 읽으면 한 동이 유니트 수만큼 쪼개지므로 합쳐 준다.
+ *
+ * ⚠️ 판별 기준은 레이어가 아니라 **엣지 공유**다. "같은 레이어에 떨어진 폴리곤 여러 개"는
+ * 같은 타입 주동을 여러 동 배치한다는 기존 규약이므로 절대 합치면 안 된다.
+ */
+function mergeAdjacentBuildingPolylines(
+  polylines: RawPolyline[],
+  warnings: string[],
+): RawPolyline[] {
+  const order: string[] = [];
+  const byLayer = new Map<string, RawPolyline[]>();
+  for (const pl of polylines) {
+    const list = byLayer.get(pl.layer);
+    if (list) {
+      list.push(pl);
+    } else {
+      byLayer.set(pl.layer, [pl]);
+      order.push(pl.layer);
+    }
+  }
+
+  const out: RawPolyline[] = [];
+  for (const layer of order) {
+    const list = byLayer.get(layer)!;
+    if (list.length <= 1) {
+      out.push(...list);
+      continue;
+    }
+    const result = unionAdjacentPolygons(list.map((p) => p.vertices));
+    for (const f of result.failures) warnings.push(`${layer} — ${f}`);
+
+    const mergedGroups = result.sources.filter((s) => s.length > 1);
+    if (mergedGroups.length > 0) {
+      const parts = mergedGroups.reduce((n, s) => n + s.length, 0);
+      warnings.push(
+        `${layer} 레이어에서 벽을 맞댄 폴리곤 ${parts}개를 ${mergedGroups.length}개 동으로 ` +
+          `합쳤습니다 (세대 유니트·코어를 따로 그린 동평면으로 판단). ` +
+          `떨어져 있는 폴리곤은 기존대로 각각 별개 동으로 불러옵니다.`,
+      );
+    }
+    for (const poly of result.polygons) {
+      out.push({ layer, vertices: poly, closed: true });
+    }
+  }
+  return out;
 }
 
 /**
@@ -329,17 +381,21 @@ export function parseDxfBuildings(
   }
   // 건물 없이 오버레이(대지경계 등)만 있는 파일도 허용 — data/DXF_RULES.md 4장 "파일 분리" 워크플로
 
+  // 유니트·코어가 따로 그려진 동평면을 한 동으로 묶는다.
+  // "같은 레이어에 떨어진 폴리곤 여러 개"(= 같은 타입 여러 동 배치)는 건드리지 않는다.
+  const mergedPolylines = mergeAdjacentBuildingPolylines(polylines, warnings);
+
   const buildings: Building[] = [];
   let planCount = 0;
   let adjCount = 0;
-  const planTotal = polylines.filter(
+  const planTotal = mergedPolylines.filter(
     (p) => matchBuildingLayer(p.layer)?.isPlan,
   ).length;
   /** 같은 레이어(같은 타입태그)에 폴리라인이 여러 개면 이름 뒤에 -2, -3… 을 붙여 구분 */
   const nameCount = new Map<string, number>();
   /** 타입 레이어(PLAN_A_1 등)별 형상 목록 — 서로 다른 타입이 한 레이어에 섞였는지 검사용 */
   const shapesByTypeLayer = new Map<string, { name: string; sig: string; area: number }[]>();
-  for (const pl of polylines) {
+  for (const pl of mergedPolylines) {
     const m = matchBuildingLayer(pl.layer)!;
     const isPlan = m.isPlan;
     const type: BuildingType = isPlan ? "계획주동" : "인접건물";
