@@ -40,8 +40,18 @@ import {
   type PvResult,
 } from "./pv";
 // exportXlsx는 xlsx-js-style(대용량)을 끌고 오므로 클릭 시점 동적 import로 로드한다
-import { buildDxfText, hasExportContent } from "./dxfexport";
-import { deserializeView, serializeView, type ViewFileData } from "./viewfile";
+import {
+  buildDxfTextForView,
+  DXF_VIEW_LABEL,
+  hasExportContent,
+} from "./dxfexport";
+import {
+  deserializeView,
+  serializeView,
+  VIEW_FORMAT,
+  VIEW_VERSION,
+  type ViewFileData,
+} from "./viewfile";
 import { EPW_FILES, parseEpw, type EpwData } from "./epw";
 import {
   createPvEnergyOverlay,
@@ -1632,13 +1642,18 @@ document.getElementById("export-dxf")!.addEventListener("click", async () => {
     setStatus("내보낼 배치가 없습니다 — 먼저 DXF를 불러오거나 주동을 배치하세요.");
     return;
   }
-  const text = buildDxfText(project, sceneOrigin);
-  const filename = `arch_view_배치도_${new Date().toISOString().slice(0, 10)}.dxf`;
+  // 마지막으로 고른 표준 시점으로 내보낸다 — 평면은 기존 라운드트립 경로 그대로,
+  // 입면·아이소는 1:1 정투영/등각투영
+  const view = exportView;
+  const viewLabel = DXF_VIEW_LABEL[view];
+  const text = buildDxfTextForView(project, sceneOrigin, view);
+  const suffix = view === "top" ? "배치도" : viewLabel.replace(/\s/g, "");
+  const filename = `arch_view_${suffix}_${new Date().toISOString().slice(0, 10)}.dxf`;
   const outcome = await shareOrDownloadText(
     text,
     filename,
     "application/dxf",
-    "arch_view 배치도",
+    `arch_view ${viewLabel}`,
   );
   if (outcome === "cancelled") {
     setStatus("공유 취소됨");
@@ -1647,9 +1662,9 @@ document.getElementById("export-dxf")!.addEventListener("click", async () => {
   const plan = project.buildings.filter((b) => b.type === "계획주동").length;
   const adj = project.buildings.length - plan;
   setStatus(
-    `DXF ${outcome === "shared" ? "공유함" : "내보냄"} — ${filename} ` +
+    `DXF ${outcome === "shared" ? "공유함" : "내보냄"}(${viewLabel}) — ${filename} ` +
       `(계획주동 ${plan}동 · 인접건물 ${adj}동 · ` +
-      `오버레이 ${project.siteOverlays.length}개, mm 단위 R12)`,
+      `오버레이 ${project.siteOverlays.length}개, mm 단위 R12 · 축척 1:1)`,
   );
 });
 
@@ -1665,25 +1680,41 @@ function syncAllSettings(): void {
   project.site.siteAreaM2 = Math.max(0, parseFloat(siteAreaInput.value) || 0);
 }
 
-document.getElementById("save-view")!.addEventListener("click", async () => {
+/**
+ * 현재 프로젝트를 .view로 저장(또는 공유). "새로 시작하기"의 저장 단계도 같은 경로를 탄다.
+ * @returns 저장/공유가 끝났으면 true — 사용자가 공유 시트를 닫았거나 실패하면 false
+ *   (초기화처럼 되돌릴 수 없는 동작 앞에서는 이 결과를 반드시 확인해야 한다)
+ */
+async function saveProjectFile(): Promise<boolean> {
   syncAllSettings();
   const json = serializeView(project, sceneOrigin, { dxfLoadSeq, sceneSeq });
   const filename = `arch_view_${new Date().toISOString().slice(0, 10)}.view`;
-  const outcome = await shareOrDownloadText(
-    json,
-    filename,
-    "application/json",
-    "arch_view 프로젝트",
-  );
-  if (outcome === "cancelled") {
-    setStatus("공유 취소됨");
-    return;
+  try {
+    const outcome = await shareOrDownloadText(
+      json,
+      filename,
+      "application/json",
+      "arch_view 프로젝트",
+    );
+    if (outcome === "cancelled") {
+      setStatus("공유 취소됨");
+      return false;
+    }
+    setStatus(
+      `프로젝트 ${outcome === "shared" ? "공유함" : "저장"} — ${filename} ` +
+        `(장면 ${project.buildings.length}동 · ` +
+        `라이브러리 ${project.buildingLibrary.length}동 · 분석 설정 포함)`,
+    );
+    return true;
+  } catch (err) {
+    setStatus(`프로젝트 저장 실패: ${(err as Error).message}`);
+    console.error(err);
+    return false;
   }
-  setStatus(
-    `프로젝트 ${outcome === "shared" ? "공유함" : "저장"} — ${filename} ` +
-      `(장면 ${project.buildings.length}동 · ` +
-      `라이브러리 ${project.buildingLibrary.length}동 · 분석 설정 포함)`,
-  );
+}
+
+document.getElementById("save-view")!.addEventListener("click", () => {
+  void saveProjectFile();
 });
 
 /** .view에서 복원한 project 값을 UI 입력창에 되반영 */
@@ -1732,6 +1763,86 @@ function applyViewData(d: ViewFileData): void {
   updateSiteTotals();
   updateSunFromSlider();
 }
+
+// ---------- 새로 시작하기 (초기화) ----------
+
+const resetModal = document.getElementById("reset-modal") as HTMLElement;
+
+/** 초기화하면 사라지는 것이 있는가 — 빈 화면이면 확인 없이 바로 초기화한다 */
+function hasWorkInProgress(): boolean {
+  return (
+    project.buildings.length > 0 ||
+    project.buildingLibrary.length > 0 ||
+    project.siteOverlays.length > 0 ||
+    project.terrainPoints.length > 0
+  );
+}
+
+/**
+ * 빈 프로젝트로 되돌린다. 복원 경로(applyViewData)를 그대로 재사용해
+ * "불러오기로 빈 프로젝트를 연 것"과 같은 상태가 되게 한다 —
+ * 장면·오버레이·지형·분석 결과·선택 상태가 한 곳에서 정리된다.
+ */
+function resetProject(): void {
+  const empty = defaultProject();
+  applyViewData({
+    format: VIEW_FORMAT,
+    version: VIEW_VERSION,
+    savedAt: "",
+    sceneOrigin: null,
+    // 카운터는 이어서 발급 — 초기화 후 새 건물이 이전 id와 겹치지 않게
+    counters: { dxfLoadSeq, sceneSeq },
+    site: empty.site,
+    analysis: empty.analysis,
+    buildings: [],
+    buildingLibrary: [],
+    siteOverlays: [],
+    terrainPoints: [],
+  });
+  setStatus("새로 시작 — 화면이 초기화되었습니다. DXF 파일을 불러오세요.");
+}
+
+document.getElementById("new-project")!.addEventListener("click", () => {
+  if (!hasWorkInProgress()) {
+    resetProject();
+    return;
+  }
+  const t = siteUnitTotals(project.buildings);
+  const summary = document.getElementById("reset-summary");
+  if (summary) {
+    summary.textContent =
+      `현재 작업: 장면 ${project.buildings.length}동` +
+      (t.total > 0 ? ` · ${t.total}세대` : "") +
+      ` · 라이브러리 ${project.buildingLibrary.length}동` +
+      (project.siteOverlays.length > 0 ? ` · 오버레이 ${project.siteOverlays.length}개` : "") +
+      (project.terrainPoints.length > 0 ? " · 지형 있음" : "");
+  }
+  resetModal.hidden = false;
+});
+
+document.getElementById("reset-cancel")!.addEventListener("click", () => {
+  resetModal.hidden = true;
+});
+
+resetModal.addEventListener("click", (e) => {
+  if (e.target === resetModal) resetModal.hidden = true;
+});
+
+document.getElementById("reset-discard")!.addEventListener("click", () => {
+  resetModal.hidden = true;
+  resetProject();
+});
+
+document.getElementById("reset-save-first")!.addEventListener("click", async () => {
+  // 저장이 끝난(또는 공유 시트를 닫은) 뒤에만 초기화 — 저장 실패로 작업을 잃지 않게
+  const saved = await saveProjectFile();
+  if (!saved) {
+    setStatus("저장하지 못해 초기화를 중단했습니다 — 작업은 그대로입니다.");
+    return;
+  }
+  resetModal.hidden = true;
+  resetProject();
+});
 
 document.getElementById("view-file")!.addEventListener("change", async (e) => {
   const input = e.target as HTMLInputElement;
@@ -2147,16 +2258,28 @@ compareModal.addEventListener("click", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !compareModal.hidden) compareModal.hidden = true;
+  if (e.key !== "Escape") return;
+  if (!compareModal.hidden) compareModal.hidden = true;
+  // 초기화 확인은 Esc를 "취소"로 — 실수로 진행되지 않게
+  const reset = document.getElementById("reset-modal");
+  if (reset && !reset.hidden) reset.hidden = true;
 });
 
 refreshSchemeList();
 
 // ---------- 표준 시점 버튼 (캔버스 우상단) ----------
 
+/**
+ * 마지막으로 고른 표준 시점 — DXF 내보내기가 어느 시점으로 나갈지 결정한다.
+ * 카메라를 직접 돌려도 이 값은 유지된다(자유 시점은 도면화 대상이 아니므로
+ * 마지막 표준 시점을 기준으로 내보내는 편이 예측 가능하다).
+ */
+let exportView: ViewPreset = "top";
+
 for (const btn of document.querySelectorAll<HTMLButtonElement>("#view-presets [data-view]")) {
   btn.addEventListener("click", () => {
     const preset = btn.dataset.view as ViewPreset;
+    exportView = preset;
     viewer.setViewPreset(preset);
     // 마지막으로 고른 시점을 표시 — 회전하면 어긋나지만 "어디서 왔는지" 단서가 된다
     for (const other of document.querySelectorAll("#view-presets [data-view]")) {

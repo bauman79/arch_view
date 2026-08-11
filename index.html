@@ -1692,6 +1692,8 @@
             <label class="btn menu-item" for="dxf-file">DXF 불러오기</label>
             <label class="btn menu-item" for="dxf-file-add">DXF 추가</label>
             <hr class="menu-divider" />
+            <button id="new-project" class="btn menu-item">새로 시작하기</button>
+            <hr class="menu-divider" />
             <label class="btn menu-item" for="view-file">프로젝트 열기</label>
             <button id="save-view" class="btn menu-item">프로젝트 저장</button>
             <hr class="menu-divider" />
@@ -2166,6 +2168,25 @@
             ><button class="btn">지형 등고선 규약 (M7)</button></a
           >
           <button id="close-layer-rules" class="btn primary">닫기</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 새로 시작하기 확인 모달 =================
+         초기화는 되돌릴 수 없으므로 저장 여부를 먼저 묻는다. -->
+    <div id="reset-modal" class="modal-overlay" hidden>
+      <div class="modal-box">
+        <h2>새로 시작하기</h2>
+        <p class="hint" id="reset-summary"></p>
+        <p class="hint">
+          초기화하면 장면·라이브러리·오버레이·지형과 분석 결과가 모두 지워집니다.
+          되돌릴 수 없으니 필요하면 먼저 저장하세요.
+          (저장된 배치안 슬롯은 지워지지 않습니다.)
+        </p>
+        <div class="row">
+          <button id="reset-save-first" class="btn primary">저장 후 초기화</button>
+          <button id="reset-discard" class="btn">저장 안 함</button>
+          <button id="reset-cancel" class="btn">취소</button>
         </div>
       </div>
     </div>
