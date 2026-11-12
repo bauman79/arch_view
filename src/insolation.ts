@@ -89,6 +89,9 @@ export function buildAnalysisGrid(
     const fp = worldFootprint(b);
     const H = buildingHeight(b);
     if (H <= 0 || fp.length < 3) continue;
+    // M7 지형 G.L. — 건물 매스는 지반고 위에 그려지므로 격자도 같은 높이에 둔다.
+    // 0 기준으로 두면 지형이 있을 때 결과가 땅속에 그려져 보이지 않는다(지형 없으면 0).
+    const gl = b.terrainElevation ?? 0;
     const windingSign = signedArea(fp) >= 0 ? 1 : -1;
 
     for (let i = 0; i < fp.length; i++) {
@@ -117,7 +120,7 @@ export function buildAnalysisGrid(
         const px = p1.x + ex * t;
         const py = p1.y + ey * t;
         for (let ri = 0; ri < nrow; ri++) {
-          const z = ((ri + 0.5) / nrow) * H;
+          const z = gl + ((ri + 0.5) / nrow) * H;
           cells.push({
             buildingId: b.id,
             surface: "wall",
@@ -148,7 +151,7 @@ export function buildAnalysisGrid(
         cells.push({
           buildingId: b.id,
           surface: "roof",
-          center: new THREE.Vector3(x, H, -y),
+          center: new THREE.Vector3(x, gl + H, -y),
           normal: up.clone(),
           w: gridSize,
           h: gridSize,
@@ -163,7 +166,8 @@ export function buildAnalysisGrid(
 
 /**
  * 전 건물의 차폐 매스 생성 (월드 좌표, BVH 포함).
- * 필로티 층수만큼 하부는 비워서 레이가 통과한다.
+ * 필로티 층수만큼 하부는 비워서 레이가 통과한다. 지형이 있으면 각 건물의 G.L. 위에 세운다
+ * (지형면 자체는 차폐로 넣지 않는다 — 등고 경사가 완만한 도심 배치 검토 범위).
  *
  * 모든 건물을 **하나의 지오메트리·하나의 BVH로 합쳐** 메시 1개 배열로 돌려준다.
  * 건물마다 메시를 따로 두면 광선 하나가 건물 수만큼 메시를 차례로 검사해야 해서
@@ -193,6 +197,9 @@ export function buildObstructionMeshes(buildings: Building[]): THREE.Mesh[] {
     });
     if (base > 0) geom.translate(0, 0, base);
     geom.rotateX(-Math.PI / 2); // DXF y+ → three -z
+    // 격자와 같은 기준 — 지형 G.L. 위에 세운다 (높은 땅의 건물이 더 멀리 그늘을 드리운다)
+    const gl = b.terrainElevation ?? 0;
+    if (gl !== 0) geom.translate(0, gl, 0);
     // 차폐 판정에는 위치만 필요 — 법선·UV를 버려 합칠 때 속성 불일치와 메모리를 피한다
     const pos = new THREE.BufferGeometry();
     pos.setAttribute("position", geom.getAttribute("position"));

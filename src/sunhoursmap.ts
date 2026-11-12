@@ -10,6 +10,7 @@ import {
 import { pointInPolygon } from "./geom2d";
 import { yieldToEventLoop } from "./pv";
 import { sunSamples, type SunSample } from "./sun";
+import { buildTerrainModel, nearestPointElevation, sampleElevation } from "./terrain";
 import type { Point2, Project } from "./types";
 
 /**
@@ -95,8 +96,15 @@ interface WorkCell {
   isGround: boolean;
 }
 
-/** 지면 격자 — 전 건물 bbox+여유를 훑고 footprint 내부는 제외 (z=0, 법선 +Y) */
+/**
+ * 지면 격자 — 전 건물 bbox+여유를 훑고 footprint 내부는 제외 (법선 +Y).
+ * 높이는 지형이 있으면 지형면, 없으면 0 — 건물이 G.L. 위에 서 있으므로 지면 셀도
+ * 같은 기준이어야 땅속에 묻히지 않는다.
+ */
 function buildGroundGrid(project: Project): WorkCell[] {
+  const tm = project.terrainPoints.length >= 3 ? buildTerrainModel(project.terrainPoints) : null;
+  const groundZ = (x: number, y: number): number =>
+    tm ? sampleElevation(tm, x, y) ?? nearestPointElevation(tm, x, y) : 0;
   const footprints: Point2[][] = [];
   let minX = Infinity;
   let minY = Infinity;
@@ -132,7 +140,7 @@ function buildGroundGrid(project: Project): WorkCell[] {
       }
       if (inside) continue;
       cells.push({
-        center: new THREE.Vector3(x, 0, -y),
+        center: new THREE.Vector3(x, groundZ(x, y), -y),
         normal: up.clone(),
         w: SUNMAP_GRID_M,
         h: SUNMAP_GRID_M,
@@ -309,8 +317,11 @@ export function sunHoursColor(hours: number, out = new THREE.Color()): THREE.Col
 
 const LEGAL_PASS = new THREE.Color(0x4c8bf5); // 파랑 — 연속2h 또는 총4h 충족
 const LEGAL_FAIL = new THREE.Color(0xe5484d); // 빨강 — 둘 다 미달
-/** 지면 셀 오프셋 — 뷰어 바닥 그리드와의 z-fighting 회피 */
-const GROUND_OFFSET = 0.06;
+/**
+ * 지면 셀 오프셋 — 바닥 그리드·지형면, 그리고 지형 위 대상지 채움(+0.08m)보다 위에 그려지게.
+ * 대상지 채움 정점은 4m 간격 보간이라 TIN과 수 cm 어긋날 수 있어 여유를 둔다.
+ */
+const GROUND_OFFSET = 0.2;
 /** 건물 표면 셀 오프셋 — PV(M4/M5) 오버레이(0.08)와 겹쳐도 위에 그려지게 */
 const SURFACE_OFFSET = 0.14;
 const Z_PLUS = new THREE.Vector3(0, 0, 1);

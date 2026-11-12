@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { signedArea } from "./geom2d";
+import Delaunator from "delaunator";
+import { pointInPolygon, signedArea } from "./geom2d";
 import { buildingHeight, type Building, type OverlayLine, type Point2 } from "./types";
 import { edgeHasWindow } from "./windows";
 
@@ -26,6 +27,11 @@ const OVERLAY_COLOR: Record<OverlayLine["layer"], number> = {
  * 그림자(그림자 영역은 반구광만 받아 어두워짐)가 대비로 드러난다.
  */
 const SITE_FILL_COLOR = 0x7a828c;
+/** 지형 위 대상지 채움 — 회색 지형(0x8b939e)과 확실히 구분되는 차분한 녹색 */
+const SITE_DRAPE_COLOR = 0x5f8a62;
+/** 대상지 드레이프 메시 해상도(m) — 경계는 더 촘촘히 따야 오목한 모서리가 뭉개지지 않는다 */
+const SITE_DRAPE_GRID_M = 4;
+const SITE_DRAPE_EDGE_M = 2;
 /**
  * 대지 채움 높이 — 격자(0) 위, 오버레이 선(0.05) 아래.
  * 지면판(-0.05)과의 간격 0.07m는 카메라 near=0.1·far=5000에서 원거리(수백 m) 깊이
@@ -55,9 +61,9 @@ export function createOverlayGroup(
   const group = new THREE.Group();
   const y = 0.05;
   for (const o of overlays) {
-    if (o.layer === "SITE_BOUNDARY" && !elevate) {
-      // 회색 채움은 평지 전용 — 지형이 보이면 지형면이 바닥 역할을 한다
-      const fill = createSiteFill(o);
+    if (o.layer === "SITE_BOUNDARY") {
+      // 평지면 회색 채움, 지형이 있으면 지형면을 따라 얹은 색 채움으로 대상지를 구분한다
+      const fill = elevate ? createDrapedSiteFill(o, elevate) : createSiteFill(o);
       if (fill) group.add(fill);
     }
     const src = o.closed ? [...o.points, o.points[0]] : o.points;
@@ -88,6 +94,66 @@ export function createOverlayGroup(
     group.add(line);
   }
   return group;
+}
+
+/**
+ * 지형 위에 얹은 대상지 채움. 평면 하나로 채우면 경사면을 관통하거나 땅속에 묻히므로,
+ * 경계를 2m·내부를 4m 간격 점으로 채워 삼각분할하고 각 점을 지형 높이에 올린다.
+ * 들로네 삼각형 중 무게중심이 폴리곤 밖인 것(오목한 모서리를 가로지르는 것)은 버린다.
+ */
+function createDrapedSiteFill(
+  o: OverlayLine,
+  elevate: (x: number, y: number) => number,
+): THREE.Mesh | null {
+  const poly = o.points;
+  if (poly.length < 3) return null;
+  const pts: Point2[] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / SITE_DRAPE_EDGE_M));
+    for (let k = 0; k < n; k++) pts.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n });
+  }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of poly) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  for (let x = minX + SITE_DRAPE_GRID_M / 2; x < maxX; x += SITE_DRAPE_GRID_M) {
+    for (let y = minY + SITE_DRAPE_GRID_M / 2; y < maxY; y += SITE_DRAPE_GRID_M) {
+      if (pointInPolygon(x, y, poly)) pts.push({ x, y });
+    }
+  }
+  const coords = new Float64Array(pts.length * 2);
+  pts.forEach((p, i) => { coords[2 * i] = p.x; coords[2 * i + 1] = p.y; });
+  const tri = new Delaunator(coords).triangles;
+  const pos: number[] = [];
+  const zs = pts.map((p) => elevate(p.x, p.y) + 0.08);
+  for (let t = 0; t < tri.length; t += 3) {
+    const [i, j, k] = [tri[t], tri[t + 1], tri[t + 2]];
+    const cx = (pts[i].x + pts[j].x + pts[k].x) / 3;
+    const cy = (pts[i].y + pts[j].y + pts[k].y) / 3;
+    if (!pointInPolygon(cx, cy, poly)) continue;
+    for (const v of [i, j, k]) pos.push(pts[v].x, zs[v], -pts[v].y);
+  }
+  if (pos.length === 0) return null;
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geom.computeVertexNormals();
+  const mesh = new THREE.Mesh(
+    geom,
+    new THREE.MeshLambertMaterial({
+      color: SITE_DRAPE_COLOR,
+      side: THREE.DoubleSide,
+      // 지형면과 거의 같은 높이라 깊이값을 당겨 깜빡임(z-fighting) 없이 위에 보이게
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }),
+  );
+  mesh.receiveShadow = true;
+  mesh.name = "site-drape";
+  return mesh;
 }
 
 /**
