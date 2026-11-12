@@ -4,6 +4,7 @@ import {
   computeBoundsTree,
   disposeBoundsTree,
 } from "three-mesh-bvh";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { pilotiHeight, worldFootprint } from "./buildings";
 import { buildingHeight, type Building, type Point2 } from "./types";
 import { edgeHasWindow } from "./windows";
@@ -163,9 +164,15 @@ export function buildAnalysisGrid(
 /**
  * 전 건물의 차폐 매스 생성 (월드 좌표, BVH 포함).
  * 필로티 층수만큼 하부는 비워서 레이가 통과한다.
+ *
+ * 모든 건물을 **하나의 지오메트리·하나의 BVH로 합쳐** 메시 1개 배열로 돌려준다.
+ * 건물마다 메시를 따로 두면 광선 하나가 건물 수만큼 메시를 차례로 검사해야 해서
+ * (Raycaster.intersectObjects는 메시마다 경계구 검사 → BVH 순회), 주변 건물 630동이 든
+ * 배치도에서 일조권 검토가 72만 셀 기준 약 4시간 걸렸다. 호출부는 모두 "막혔는가"만
+ * 보므로 합쳐도 판정 결과는 같다.
  */
 export function buildObstructionMeshes(buildings: Building[]): THREE.Mesh[] {
-  const meshes: THREE.Mesh[] = [];
+  const parts: THREE.BufferGeometry[] = [];
   for (const b of buildings) {
     const H = buildingHeight(b);
     const base = Math.min(pilotiHeight(b), H);
@@ -186,10 +193,18 @@ export function buildObstructionMeshes(buildings: Building[]): THREE.Mesh[] {
     });
     if (base > 0) geom.translate(0, 0, base);
     geom.rotateX(-Math.PI / 2); // DXF y+ → three -z
-    (geom as any).computeBoundsTree();
-    meshes.push(new THREE.Mesh(geom));
+    // 차폐 판정에는 위치만 필요 — 법선·UV를 버려 합칠 때 속성 불일치와 메모리를 피한다
+    const pos = new THREE.BufferGeometry();
+    pos.setAttribute("position", geom.getAttribute("position"));
+    parts.push(pos);
+    geom.dispose();
   }
-  return meshes;
+  if (parts.length === 0) return [];
+  const merged = mergeGeometries(parts, false);
+  for (const g of parts) g.dispose();
+  if (!merged) return [];
+  (merged as any).computeBoundsTree();
+  return [new THREE.Mesh(merged)];
 }
 
 export function disposeObstructionMeshes(meshes: THREE.Mesh[]): void {
