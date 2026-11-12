@@ -14,7 +14,7 @@ export const SELECT_EMISSIVE = 0x5a4a14;
 
 /** data/DXF_RULES.md 표의 레이어 색상과 맞춘 오버레이 선 색 */
 const OVERLAY_COLOR: Record<OverlayLine["layer"], number> = {
-  SITE_BOUNDARY: 0xe0e0e0,
+  SITE_BOUNDARY: 0xff3b30, // 사업 경계 — CAD 정리본과 같은 빨강으로 다른 선과 구분
   ADJ_BOUNDARY: 0xe6c84a,
   ROAD_CL: 0x4ac8e6,
   PARK_BOUNDARY: 0x4ac86a,
@@ -38,16 +38,49 @@ const SITE_FILL_Y = 0.02;
  * z=0(지면) 바로 위에 얇게 표시 — 건물처럼 압출·인터랙션하지 않는다.
  * 닫힌 SITE_BOUNDARY는 내부를 회색 면으로 채워 그림자 확인용 바닥으로 쓴다.
  */
-export function createOverlayGroup(overlays: OverlayLine[]): THREE.Group {
+/** 지형 위에 얹을 때 선분을 이 길이(m) 이하로 나눈다 — 길게 이으면 경사면을 관통한다 */
+const DRAPE_STEP_M = 5;
+/** 지형 표면 위로 띄우는 높이(m) — 면과 같은 높이면 깜빡이며 가려진다(z-fighting) */
+const DRAPE_LIFT_M = 0.15;
+
+/**
+ * 참고 오버레이 선(대지경계·도로중심선 등).
+ * @param elevate 지형 고도 샘플러 — 있으면 선을 지형 표면을 따라 얹는다. 없으면 평지(0.05m).
+ *   지형이 15~30m 높이에 있을 때 고정 높이로 그리면 선이 지형 아래에 묻혀 보이지 않는다.
+ */
+export function createOverlayGroup(
+  overlays: OverlayLine[],
+  elevate?: (x: number, y: number) => number,
+): THREE.Group {
   const group = new THREE.Group();
   const y = 0.05;
   for (const o of overlays) {
-    if (o.layer === "SITE_BOUNDARY") {
+    if (o.layer === "SITE_BOUNDARY" && !elevate) {
+      // 회색 채움은 평지 전용 — 지형이 보이면 지형면이 바닥 역할을 한다
       const fill = createSiteFill(o);
       if (fill) group.add(fill);
     }
-    const pts = o.points.map((p) => new THREE.Vector3(p.x, y, -p.y));
-    if (o.closed) pts.push(pts[0].clone());
+    const src = o.closed ? [...o.points, o.points[0]] : o.points;
+    let pts: THREE.Vector3[];
+    if (elevate) {
+      pts = [];
+      for (let i = 0; i < src.length; i++) {
+        const a = src[i];
+        if (i === src.length - 1) {
+          pts.push(new THREE.Vector3(a.x, elevate(a.x, a.y) + DRAPE_LIFT_M, -a.y));
+          break;
+        }
+        const b = src[i + 1];
+        const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / DRAPE_STEP_M));
+        for (let k = 0; k < n; k++) {
+          const x = a.x + ((b.x - a.x) * k) / n;
+          const yy = a.y + ((b.y - a.y) * k) / n;
+          pts.push(new THREE.Vector3(x, elevate(x, yy) + DRAPE_LIFT_M, -yy));
+        }
+      }
+    } else {
+      pts = src.map((p) => new THREE.Vector3(p.x, y, -p.y));
+    }
     const geom = new THREE.BufferGeometry().setFromPoints(pts);
     const mat = new THREE.LineBasicMaterial({ color: OVERLAY_COLOR[o.layer] });
     const line = new THREE.Line(geom, mat);

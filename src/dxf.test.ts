@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { signedArea } from "./geom2d";
-import { parseDxfBuildings } from "./dxf";
+import { letterSeq, parseDxfBuildings, parseFloorText } from "./dxf";
 
 /**
  * dxf.ts 파싱 검증 — 단위 자동감지($INSUNITS), 레이어 접미사 층수 파싱,
@@ -70,7 +70,7 @@ describe("단위 자동감지", () => {
 });
 
 describe("레이어 접미사 층수", () => {
-  it("PLAN_BLDG_15F → 15층, 접미사 없으면 기본 15층", () => {
+  it("PLAN_BLDG_15F → 15층, 접미사 없으면 기본 1층", () => {
     const text = dxfText({
       entities:
         rectEntity("PLAN_BLDG_15F", 0, 0, 10000, 10000) +
@@ -78,7 +78,7 @@ describe("레이어 접미사 층수", () => {
     });
     const r = parseDxfBuildings(text, "mm");
     expect(r.buildings[0].floors).toBe(15);
-    expect(r.buildings[1].floors).toBe(15);
+    expect(r.buildings[1].floors).toBe(1); // 층수 정보 없음 → 1개층으로 불러와 직접 입력
   });
 
   it("ADJ_BLDG_5F → 5층 (대소문자 무관)", () => {
@@ -90,7 +90,7 @@ describe("레이어 접미사 층수", () => {
 });
 
 describe("PLAN_<타입>_<번호> 권장 규약", () => {
-  it("PLAN_A_1 → 계획주동_A_1, 기본 15층", () => {
+  it("PLAN_A_1 → 계획주동_A_1, 기본 1층", () => {
     const text = dxfText({
       entities:
         rectEntity("PLAN_A_1", 0, 0, 10000, 10000) +
@@ -99,7 +99,7 @@ describe("PLAN_<타입>_<번호> 권장 규약", () => {
     const r = parseDxfBuildings(text, "mm");
     expect(r.buildings[0].name).toBe("계획주동_A_1");
     expect(r.buildings[0].type).toBe("계획주동");
-    expect(r.buildings[0].floors).toBe(15); // 접미사 없음 → 기본값
+    expect(r.buildings[0].floors).toBe(1); // 접미사 없음 → 기본 1층
     expect(r.buildings[1].name).toBe("계획주동_B_2");
   });
 
@@ -110,12 +110,12 @@ describe("PLAN_<타입>_<번호> 권장 규약", () => {
     expect(r.buildings[0].floors).toBe(20);
   });
 
-  it("ADJ_<타입>_<번호>도 지원 — ADJ_C_1 → 인접건물_C_1, 기본 5층", () => {
+  it("ADJ_<타입>_<번호>도 지원 — ADJ_C_1 → 인접건물_C_1, 기본 1층", () => {
     const text = dxfText({ entities: rectEntity("ADJ_C_1", 0, 0, 10000, 10000) });
     const r = parseDxfBuildings(text, "mm");
     expect(r.buildings[0].name).toBe("인접건물_C_1");
     expect(r.buildings[0].type).toBe("인접건물");
-    expect(r.buildings[0].floors).toBe(5);
+    expect(r.buildings[0].floors).toBe(1);
   });
 
   it("같은 레이어에 폴리라인이 여러 개면 -2, -3으로 구분", () => {
@@ -411,5 +411,117 @@ describe("벽을 맞댄 폴리곤 병합", () => {
       "계획주동_A_1",
       "계획주동_B_1",
     ]);
+  });
+});
+
+/**
+ * 건물 외곽선 안의 층수 문자 — 배치도를 통째로 불러온 뒤 동마다 층수를 따로 적어 두는 흐름.
+ */
+describe("층수 문자", () => {
+  function textEntity(layer: string, x: number, y: number, s: string, centered = false): string {
+    // centered: 정렬 지정(72/73) + 두 번째 정렬점(11/21) — CAD에서 가운데 맞춤한 문자
+    return centered
+      ? `0\nTEXT\n8\n${layer}\n10\n0\n20\n0\n30\n0\n40\n500\n1\n${s}\n72\n1\n11\n${x}\n21\n${y}\n31\n0\n73\n2\n`
+      : `0\nTEXT\n8\n${layer}\n10\n${x}\n20\n${y}\n30\n0\n40\n500\n1\n${s}\n`;
+  }
+  function mtextEntity(layer: string, x: number, y: number, s: string): string {
+    return `0\nMTEXT\n8\n${layer}\n10\n${x}\n20\n${y}\n30\n0\n40\n500\n1\n${s}\n`;
+  }
+
+  it("parseFloorText — 5F·5층·5·서식 코드를 읽고, 지하·복합 표기는 무시", () => {
+    expect(parseFloorText("5F")).toBe(5);
+    expect(parseFloorText(" 12 f ")).toBe(12);
+    expect(parseFloorText("7층")).toBe(7);
+    expect(parseFloorText("3")).toBe(3);
+    expect(parseFloorText("{\\fArial|b0;15F}")).toBe(15);
+    expect(parseFloorText("B1")).toBeNull();
+    expect(parseFloorText("5F/2F")).toBeNull();
+    expect(parseFloorText("0")).toBeNull();
+    expect(parseFloorText("주차장")).toBeNull();
+  });
+
+  it("BLDG_FLOORS 문자가 외곽선 안에 있으면 그 층수로 불러온다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("ADJ_BLDG", 0, 0, 10000, 10000) +
+        rectEntity("ADJ_BLDG", 20000, 0, 30000, 10000) +
+        textEntity("BLDG_FLOORS", 5000, 5000, "4F") +
+        textEntity("BLDG_FLOORS", 25000, 5000, "9F", true),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings.map((b) => b.floors)).toEqual([4, 9]);
+    expect(r.floorsFromText).toBe(2);
+  });
+
+  it("문자가 없는 동은 기본 1층", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("ADJ_BLDG", 0, 0, 10000, 10000) +
+        rectEntity("ADJ_BLDG", 20000, 0, 30000, 10000) +
+        textEntity("BLDG_FLOORS", 5000, 5000, "6F"),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings.map((b) => b.floors)).toEqual([6, 1]);
+  });
+
+  it("층수 문자가 레이어 접미사(_15F)보다 우선한다", () => {
+    const text = dxfText({
+      entities: rectEntity("PLAN_A_1_15F", 0, 0, 10000, 10000) + textEntity("BLDG_FLOORS", 5000, 5000, "23F"),
+    });
+    expect(parseDxfBuildings(text, "mm").buildings[0].floors).toBe(23);
+  });
+
+  it("건물과 같은 레이어에 적은 숫자 문자도 인정, MTEXT도 읽는다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 10000, 10000) +
+        mtextEntity("PLAN_A_1", 5000, 5000, "{\\fArial|b0;18층}"),
+    });
+    expect(parseDxfBuildings(text, "mm").buildings[0].floors).toBe(18);
+  });
+
+  it("엉뚱한 레이어의 숫자(치수·세대수 등)는 층수로 쓰지 않는다", () => {
+    const text = dxfText({
+      entities: rectEntity("ADJ_BLDG", 0, 0, 10000, 10000) + textEntity("DIM", 5000, 5000, "36"),
+    });
+    expect(parseDxfBuildings(text, "mm").buildings[0].floors).toBe(1);
+  });
+
+  it("외곽선 밖에 떨어진 층수 문자는 무시하고 알린다", () => {
+    const text = dxfText({
+      entities: rectEntity("ADJ_BLDG", 0, 0, 10000, 10000) + textEntity("BLDG_FLOORS", 50000, 5000, "5F"),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings[0].floors).toBe(1);
+    expect(r.warnings.some((w) => w.includes("어떤 건물 외곽선 안에도"))).toBe(true);
+  });
+
+  it("한 동에 서로 다른 층수가 적혀 있으면 큰 값을 쓰고 알린다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("ADJ_BLDG", 0, 0, 10000, 10000) +
+        textEntity("BLDG_FLOORS", 3000, 5000, "3F") +
+        textEntity("BLDG_FLOORS", 7000, 5000, "5F"),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings[0].floors).toBe(5);
+    expect(r.warnings.some((w) => w.includes("가장 큰 값"))).toBe(true);
+  });
+});
+
+describe("인접건물 이름 (26동 초과 회귀)", () => {
+  it("letterSeq — A…Z 다음은 AA, AB …", () => {
+    expect([1, 2, 26, 27, 28, 52, 53, 702, 703].map(letterSeq)).toEqual([
+      "A", "B", "Z", "AA", "AB", "AZ", "BA", "ZZ", "AAA",
+    ]);
+  });
+
+  it("30동을 불러와도 이름이 깨지지 않는다", () => {
+    let ents = "";
+    for (let i = 0; i < 30; i++) ents += rectEntity("ADJ_BLDG", i * 20000, 0, i * 20000 + 10000, 10000);
+    const names = parseDxfBuildings(dxfText({ entities: ents }), "mm").buildings.map((b) => b.name);
+    expect(names[25]).toBe("인접건물 Z");
+    expect(names[26]).toBe("인접건물 AA");
+    expect(names.every((n) => /^인접건물 [A-Z]+$/.test(n))).toBe(true);
   });
 });

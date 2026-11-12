@@ -47,6 +47,10 @@ export class Viewer {
 
   private container: HTMLElement;
   private groundHelpers: THREE.Object3D[] = [];
+  /** 기본 바닥·격자 크기(m) — 장면이 커지면 adaptToScene()이 배율로 늘린다 */
+  private static readonly BASE_GROUND = 400;
+  /** 태양광원까지 거리(m) — 그림자 카메라가 장면 전체를 담도록 장면 크기에 맞춘다 */
+  private sunDistance = 500;
   private resizeObserver: ResizeObserver | null = null;
 
   constructor(container: HTMLElement) {
@@ -119,7 +123,7 @@ export class Viewer {
     }
     this.sunLight.visible = true;
     this.sunLight.target.position.set(0, 0, 0);
-    this.sunLight.position.copy(dir).multiplyScalar(500);
+    this.sunLight.position.copy(dir).multiplyScalar(this.sunDistance);
   }
 
   private setupLightsAndGround(): void {
@@ -162,6 +166,51 @@ export class Viewer {
     return box.isEmpty() ? null : box;
   }
 
+  /**
+   * 바닥·격자·그림자·안개 범위를 장면 크기에 맞춘다.
+   * 고정값(바닥 400m, 그림자 ±250m, 안개 600~1600m)은 단지 하나 정도를 가정한 값이라,
+   * 주변 필지까지 포함한 1km 규모 배치도를 불러오면 바닥이 모자라고 그림자가 잘리며
+   * 카메라를 장면 전체가 보이게 물리면 안개에 묻힌다. 작은 장면은 기존 값을 그대로 쓴다.
+   */
+  private adaptToScene(center: THREE.Vector3, radius: number): void {
+    const base = Viewer.BASE_GROUND;
+    const span = Math.max(base, radius * 3);
+    for (const h of this.groundHelpers) {
+      if (h instanceof THREE.GridHelper) {
+        h.scale.set(span / base, 1, span / base);
+        h.position.set(center.x, 0, center.z);
+      } else if (h instanceof THREE.Mesh) {
+        h.scale.set(span / base, span / base, 1); // 바닥 평면은 x축 -90° 회전 → 로컬 y가 월드 z
+        h.position.set(center.x, -0.05, center.z);
+      }
+    }
+    const half = Math.max(250, radius * 1.1);
+    const cam = this.sunLight.shadow.camera;
+    cam.left = -half;
+    cam.right = half;
+    cam.top = half;
+    cam.bottom = -half;
+    this.sunDistance = Math.max(500, radius * 2);
+    cam.far = Math.max(1500, this.sunDistance + radius * 2);
+    cam.updateProjectionMatrix();
+    // 넓은 장면은 그림자 해상도를 올려 m당 텍셀 밀도를 유지한다
+    const want = half > 300 ? 4096 : 2048;
+    if (this.sunLight.shadow.mapSize.x !== want) {
+      this.sunLight.shadow.mapSize.set(want, want);
+      this.sunLight.shadow.map?.dispose();
+      this.sunLight.shadow.map = null;
+    }
+    // 태양 방향은 유지한 채 거리만 갱신
+    if (this.sunLight.position.lengthSq() > 0) {
+      this.sunLight.position.setLength(this.sunDistance);
+    }
+    const fog = this.scene.fog as THREE.Fog;
+    fog.near = Math.max(600, radius * 2.5);
+    fog.far = Math.max(1600, radius * 8);
+    this.camera.far = Math.max(5000, radius * 12);
+    this.camera.updateProjectionMatrix();
+  }
+
   /** 건물 + 오버레이(대지경계 등) + 지형 전체 바운딩 박스에 맞춰 카메라를 이동 */
   fitToBuildings(): void {
     this.setViewPreset("iso");
@@ -179,6 +228,7 @@ export class Viewer {
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(size.x, size.z, size.y) * 0.9 + 20;
+    this.adaptToScene(center, radius);
 
     const dir = VIEW_PRESET_DIR[preset].clone().normalize();
     this.controls.target.copy(center);

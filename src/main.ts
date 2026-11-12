@@ -191,14 +191,6 @@ let terrainVisible = true;
 let terrainWireframe = false;
 let terrainStepped = false;
 
-/** 지형 클리핑 기준 — 닫힌 SITE_BOUNDARY 오버레이 (없으면 클리핑 없이 전체 표시) */
-function siteClipPolygon(): Point2[] | null {
-  const site = project.siteOverlays.find(
-    (o) => o.layer === "SITE_BOUNDARY" && o.points.length >= 3,
-  );
-  return site ? site.points : null;
-}
-
 /**
  * project.terrainPoints로 TIN·지형 메시를 다시 만든다 — DXF 로드/병합·.view 복원 후 호출.
  * 등고선이 없거나 퇴화(일직선)면 지형 없음 = 평지 모드.
@@ -212,7 +204,9 @@ function rebuildTerrain(): void {
   terrainModel = buildTerrainModel(project.terrainPoints);
   terrainLevels = terrainModel ? contourLevels(terrainModel) : null;
   if (terrainModel) {
-    terrainGroup = createTerrainGroup(terrainModel, siteClipPolygon());
+    // 대상지로 자르지 않고 등고선이 덮는 범위 전체를 바닥으로 깐다 —
+    // 주변 건물도 지형 위에 앉아야 하고, 대상지 밖 경사가 보여야 배치를 판단할 수 있다
+    terrainGroup = createTerrainGroup(terrainModel, null);
     applyTerrainVisibility();
     viewer.terrainRoot.add(terrainGroup);
   }
@@ -284,7 +278,7 @@ terrainSummary.textContent = "지형 없음 — CONTOUR 레이어가 있는 DXF�
 
 terrainVisibleInput.addEventListener("change", () => {
   terrainVisible = terrainVisibleInput.checked;
-  applyTerrainVisibility();
+  rebuildOverlays(); // 지형 표시 여부에 따라 선을 지형 위/평지로 다시 얹는다 (applyTerrainVisibility 포함)
 });
 
 terrainWireInput.addEventListener("change", () => {
@@ -566,7 +560,10 @@ let sceneOrigin: Point2 | null = null;
 
 function rebuildOverlays(): void {
   viewer.overlaysRoot.clear();
-  viewer.overlaysRoot.add(createOverlayGroup(project.siteOverlays));
+  // 지형이 보이면 선을 지형 표면에 얹는다 — 고정 높이면 15~30m 지형 아래에 묻힌다
+  viewer.overlaysRoot.add(
+    createOverlayGroup(project.siteOverlays, terrainVisible ? terrainSampler() : undefined),
+  );
   applyTerrainVisibility(); // 새로 만든 site-fill에 지형 표시 상태(채움 숨김) 재적용
 }
 
@@ -574,7 +571,7 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
   const unitMode = (document.getElementById("unit-select") as HTMLSelectElement)
     .value as UnitMode;
   try {
-    const { buildings, overlays, contourPoints, warnings, unitSource } = parseDxfBuildings(
+    const { buildings, overlays, contourPoints, warnings, unitSource, floorsFromText } = parseDxfBuildings(
       text,
       unitMode,
     );
@@ -598,13 +595,13 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
       selectedId = null;
     }
 
-    // PLAN_BLDG는 라이브러리에 쌓아두고 사용자가 "장면에 추가"로 골라 넣는다.
-    // ADJ_BLDG는 기존 동작대로 즉시 장면에 반영(기존 실제 건물이라 재사용 개념이 없음).
+    // 배치도를 통째로 불러오는 흐름 — 주동·인접건물 모두 도면 위치 그대로 장면에 놓는다.
+    // 주동은 라이브러리에도 남겨 두어 복제·추가 배치에 쓸 수 있게 한다(이미 배치했으므로 선택은 해제).
     const planBuildings = buildings.filter((b) => b.type === "계획주동");
     const adjBuildings = buildings.filter((b) => b.type === "인접건물");
     project.buildingLibrary.push(...planBuildings);
-    for (const b of planBuildings) libraryCheckedIds.add(b.id); // 기본 전체 선택
-    project.buildings.push(...adjBuildings);
+    const placedPlans = planBuildings.map((lib) => cloneBuildingFromLibrary(lib, 0));
+    project.buildings.push(...placedPlans, ...adjBuildings);
 
     rebuildTerrain(); // rebuildAll보다 먼저 — 건물 G.L. 계산이 terrainModel을 참조
     rebuildAll();
@@ -618,14 +615,14 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     const winCount = buildings.reduce((s, b) => s + b.windowSegments.length, 0);
     let msg =
       `${sourceName} ${merge ? "병합" : "불러옴"} (${unitSourceLabel(unitSource)}) — ` +
-      `계획주동 ${planBuildings.length}동을 라이브러리에 담음, 인접건물 ${adjBuildings.length}동 배치됨 ` +
-      `— "건물 라이브러리"에서 장면에 추가하세요`;
+      `도면 위치 그대로 계획주동 ${planBuildings.length}동 · 인접건물 ${adjBuildings.length}동 배치` +
+      (floorsFromText > 0 ? ` (층수 문자 반영 ${floorsFromText}동, 나머지 1층 — 목록에서 층수 입력)` : ` (층수 정보 없는 동은 1층 — 목록에서 층수 입력)`);
     if (overlays.length > 0) msg += `, 오버레이 ${overlays.length}개`;
     if (winCount > 0) msg += `, 창면 ${winCount}개`;
     if (terrainModel) {
       msg += `, 지형 로드됨 (고도 범위: ${terrainModel.minZ.toFixed(1)}m ~ ${terrainModel.maxZ.toFixed(1)}m)`;
     }
-    if (warnings.length > 0) msg += ` (경고 ${warnings.length}건 — 마우스를 올리면 내용 표시)`;
+    if (warnings.length > 0) msg += ` (알림 ${warnings.length}건 — "자세히")`;
     setStatus(msg, warnings.length > 0 ? warnings.join("\n\n") : undefined);
     for (const w of warnings) console.warn("[DXF]", w);
   } catch (err) {

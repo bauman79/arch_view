@@ -94,24 +94,24 @@
       <td><code>PLAN_&lt;타입&gt;_&lt;번호&gt;</code> <span class="badge">권장</span></td>
       <td>계획 주동</td><td>LWPOLYLINE (닫힘)</td>
       <td>예: <code>PLAN_A_1</code>, <code>PLAN_B_2</code>. 타입 문자(A/B/…)는 타워형·판상형
-        등을 사용자가 임의로 구분. 층수는 <b>기본 15층</b>(프로그램에서 조정),
+        등을 사용자가 임의로 구분. 층수는 <b>기본 1층</b>(불러온 뒤 입력, 외곽선 안 <code>BLDG_FLOORS</code> 층수 문자가 있으면 그 값),
         필요 시 <code>PLAN_A_1_20F</code>처럼 층수 접미사 가능.
         건물명은 <b>계획주동_A_1</b>로 표시. 색상 7(흰색) 권장</td>
     </tr>
     <tr>
       <td><code>ADJ_&lt;타입&gt;_&lt;번호&gt;</code></td>
       <td>인접 건물</td><td>LWPOLYLINE (닫힘)</td>
-      <td>예: <code>ADJ_C_1</code> → 인접건물_C_1. 기본 5층</td>
+      <td>예: <code>ADJ_C_1</code> → 인접건물_C_1. 기본 1층(층수 문자·접미사 우선)</td>
     </tr>
     <tr>
       <td><code>PLAN_BLDG(_&lt;n&gt;F)</code></td>
       <td>계획 주동 <span class="muted">(구버전 호환)</span></td><td>LWPOLYLINE (닫힘)</td>
-      <td><code>PLAN_BLDG_15F</code> = 15층. 접미사 없으면 기본 15층</td>
+      <td><code>PLAN_BLDG_15F</code> = 15층. 접미사 없으면 기본 1층</td>
     </tr>
     <tr>
       <td><code>ADJ_BLDG(_&lt;n&gt;F)</code></td>
       <td>인접 건물 <span class="muted">(구버전 호환)</span></td><td>LWPOLYLINE (닫힘)</td>
-      <td>접미사 없으면 기본 5층. 색상 6(자홍) 권장</td>
+      <td>접미사 없으면 기본 1층. 색상 6(자홍) 권장</td>
     </tr>
     <tr>
       <td><code>SITE_BOUNDARY</code></td>
@@ -160,6 +160,10 @@
     <li>같은 레이어에 <b>떨어져 있는</b> 폴리라인이 여러 개면 각각 별도 건물로 인식되며
       <code>계획주동_A_1</code>, <code>계획주동_A_1-2</code>처럼 구분됩니다.
       다만 <b>주동 1동 = 레이어 1개</b>를 권장합니다(이름 식별 명확).</li>
+    <li><b>층수 문자</b> — 건물 외곽선 안에 <code>BLDG_FLOORS</code> 레이어로 <code>5F</code>·<code>5층</code>·<code>5</code>를
+      적으면 그 층수로 불러옵니다(레이어 접미사보다 우선). 층수 정보가 없으면 1층으로 들어오니 목록에서 입력하세요.</li>
+    <li><b>배치도 통째로 불러오기</b> — 계획주동·인접건물 모두 도면 위치 그대로 배치됩니다. 등고선이 있으면
+      그 범위 전체가 지형 바닥이 되고 모든 건물이 그 위에 얹힙니다.</li>
     <li><b>세대 유니트·코어를 따로 그린 동평면</b>도 그대로 쓸 수 있습니다 — 같은 레이어에서
       <b>벽(에지)을 맞댄</b> 폴리라인들은 자동으로 한 동으로 합쳐집니다(정점 오차 2mm까지 허용,
       T자 접합 처리). 떨어져 있으면 위 규칙대로 별개 동으로 남습니다.

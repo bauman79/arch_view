@@ -2150,8 +2150,10 @@
         <p class="hint">
           주동 레이어(권장): <code>PLAN_&lt;타입&gt;_&lt;번호&gt;</code> — 예:
           <code>PLAN_A_1</code>, <code>PLAN_B_2</code> (타입 문자는 타워형·판상형 등
-          임의 구분, 층수는 기본 15층 — 목록에서 조정). 인접건물:
+          임의 구분, 층수는 기본 1층 — 목록에서 입력). 인접건물:
           <code>ADJ_BLDG_&lt;n&gt;F</code> 또는 <code>ADJ_&lt;타입&gt;_&lt;번호&gt;</code>.
+          층수 문자: 건물 외곽선 안에 <code>BLDG_FLOORS</code> 레이어로 <code>5F</code>를
+          적으면 그 층수로 불러옵니다. 불러오면 주동·인접건물 모두 도면 위치 그대로 배치됩니다.
           구버전 <code>PLAN_BLDG_&lt;n&gt;F</code>도 계속 인식됩니다.
           경계선: <code>SITE_BOUNDARY</code>(대지) / <code>ADJ_BOUNDARY</code>(인접대지 —
           정북·채광사선 기준선) / <code>ROAD_CL</code>(도로중심선) /

@@ -1,6 +1,6 @@
 import DxfParser from "dxf-parser";
 import { FixedLwpolylineParser } from "./dxf-lwpolyline";
-import { signedArea } from "./geom2d";
+import { pointInPolygon, signedArea } from "./geom2d";
 import { defaultUnitMix } from "./massing";
 import { extractContourPoints, isContourLayer } from "./terrain";
 import { unionAdjacentPolygons } from "./polyunion";
@@ -32,12 +32,48 @@ const FLOOR_SUFFIX_RE = /_(\d+)F$/i;
 /**
  * 권장 규약: PLAN_<타입문자>_<번호>(_<층수>F) — 예: PLAN_A_1, PLAN_B_2, PLAN_A_3_20F.
  * 타입 문자(A/B/…)는 사용자가 타워형·판상형 등을 임의로 구분하는 용도이고,
- * 층수 접미사가 없으면 기본 15층(UI에서 조정). 건물명은 "계획주동_A_1" 형태가 된다.
+ * 층수 접미사·층수 문자가 없으면 기본 1층(UI에서 입력). 건물명은 "계획주동_A_1" 형태가 된다.
  */
 const PLAN_TYPE_RE = /^PLAN_([A-Z]+)_(\d+)(?:_(\d+)F)?$/;
 const ADJ_TYPE_RE = /^ADJ_([A-Z]+)_(\d+)(?:_(\d+)F)?$/;
-const DEFAULT_FLOORS_PLAN = 15;
-const DEFAULT_FLOORS_ADJ = 5;
+/**
+ * 층수 정보(레이어 접미사 _nF · 건물 안 층수 문자)가 없을 때의 기본값.
+ * 도면에서 배치를 통째로 불러온 뒤 동마다 층수를 직접 입력하는 흐름이라 1개층으로 둔다
+ * (예전 기본값 15층/5층은 확인 안 된 층수가 그럴듯한 값으로 섞여 들어가는 문제가 있었다).
+ */
+export const DEFAULT_FLOORS_PLAN = 1;
+export const DEFAULT_FLOORS_ADJ = 1;
+
+/** 층수 문자 전용 레이어 — 건물 외곽선 안에 "5F"·"5층"·"5"로 적는다 */
+export const LAYER_FLOOR_TEXT = "BLDG_FLOORS";
+
+/**
+ * 층수 문자 해석 — "5F", "5 F", "5층", "5"를 5로. 그 외(지하 "B1", "5F/2F" 등)는 null.
+ * MTEXT 서식 코드({\fArial;5F}, \P 줄바꿈 등)는 걷어낸 뒤 판정한다.
+ */
+export function parseFloorText(raw: string): number | null {
+  const plain = raw
+    .replace(/\\[A-Za-z][^;\\]*;/g, "") // \fArial|b0; \H2.5; 같은 서식
+    .replace(/\\P/g, " ")
+    .replace(/[{}]/g, "")
+    .trim();
+  const m = plain.match(/^(\d{1,3})\s*(?:F|층)?$/i);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return n >= 1 && n <= 200 ? n : null;
+}
+
+/** 엑셀 열 이름 방식 1→A, 26→Z, 27→AA — 인접건물이 26동을 넘어도 이름이 깨지지 않게 */
+export function letterSeq(n: number): string {
+  let s = "";
+  let k = n;
+  while (k > 0) {
+    const r = (k - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    k = Math.floor((k - 1) / 26);
+  }
+  return s;
+}
 
 /** 도면 단위 선택 — "auto"는 DXF HEADER의 $INSUNITS를 읽고, 없으면 mm으로 가정(한국 실무 기본값) */
 export type UnitMode = "auto" | "mm" | "m";
@@ -52,6 +88,8 @@ export interface DxfLoadResult {
   warnings: string[];
   /** 실제 적용된 mm→m(또는 m→m) 변환 배율 */
   unitScale: number;
+  /** 건물 안 층수 문자로 층수가 정해진 동 수 */
+  floorsFromText: number;
   /** 배율을 어떻게 정했는지 — 상태 표시용 */
   unitSource: UnitSource;
 }
@@ -241,7 +279,28 @@ export function parseDxfBuildings(
   const planWinSegments: [Point2, Point2][] = [];
   const adjWinSegments: [Point2, Point2][] = [];
 
+  /** 층수 문자 후보 (도면 좌표 m) — 건물이 정해진 뒤 외곽선 안에 든 것을 찾아 층수로 쓴다 */
+  const floorTexts: { x: number; y: number; floors: number; layer: string }[] = [];
+
   for (const entity of dxf.entities as any[]) {
+    if (entity.type === "TEXT" || entity.type === "MTEXT") {
+      const floors = parseFloorText(String(entity.text ?? ""));
+      if (floors === null) continue;
+      // TEXT는 정렬 지정(72/73)이 있으면 두 번째 정렬점(11)이 실제 기준 위치다
+      const aligned = entity.type === "TEXT" && ((entity.halign ?? 0) !== 0 || (entity.valign ?? 0) !== 0);
+      const pt = entity.type === "MTEXT"
+        ? entity.position
+        : aligned && entity.endPoint ? entity.endPoint : entity.startPoint;
+      if (!pt) continue;
+      const ez: number = entity.extrusionDirectionZ ?? entity.extrusionDirection?.z ?? 1;
+      floorTexts.push({
+        x: pt.x * (ez < 0 ? -1 : 1) * unitScale,
+        y: pt.y * unitScale,
+        floors,
+        layer: String(entity.layer ?? "").toUpperCase(),
+      });
+      continue;
+    }
     if (
       entity.type !== "LWPOLYLINE" &&
       entity.type !== "POLYLINE" &&
@@ -395,6 +454,8 @@ export function parseDxfBuildings(
   const nameCount = new Map<string, number>();
   /** 타입 레이어(PLAN_A_1 등)별 형상 목록 — 서로 다른 타입이 한 레이어에 섞였는지 검사용 */
   const shapesByTypeLayer = new Map<string, { name: string; sig: string; area: number }[]>();
+  /** buildings[i]가 나온 원래 레이어 — 층수 문자 매칭 때 같은 레이어 문자를 허용하려고 */
+  const sourceLayers: string[] = [];
   for (const pl of mergedPolylines) {
     const m = matchBuildingLayer(pl.layer)!;
     const isPlan = m.isPlan;
@@ -411,7 +472,7 @@ export function parseDxfBuildings(
     } else {
       name = isPlan
         ? `계획주동${++planCount > 1 || planTotal > 1 ? " " + planCount : ""}`
-        : `인접건물 ${String.fromCharCode(64 + ++adjCount)}`; // A, B, C...
+        : `인접건물 ${letterSeq(++adjCount)}`; // A, B, … Z, AA, AB …
     }
     // 타입 문자(A/B/…)는 "같은 타입 주동"을 뜻하므로 한 레이어의 형상은 모두 합동이어야 한다.
     // 구버전 PLAN_BLDG/ADJ_BLDG는 타입 구분이 없는 범용 레이어라 검사 대상이 아니다.
@@ -424,6 +485,7 @@ export function parseDxfBuildings(
       });
       shapesByTypeLayer.set(pl.layer, list);
     }
+    sourceLayers.push(pl.layer);
     buildings.push({
       id: `bldg-${buildings.length + 1}`,
       name,
@@ -508,7 +570,9 @@ export function parseDxfBuildings(
     );
   }
 
-  return { buildings, overlays, contourPoints, warnings, unitScale, unitSource };
+  const floorsFromText = applyFloorTexts(buildings, sourceLayers, floorTexts, warnings);
+
+  return { buildings, overlays, contourPoints, warnings, unitScale, unitSource, floorsFromText };
 }
 
 /**
@@ -556,4 +620,55 @@ export function applyRecenterOffset(
       p.y -= offset.y;
     }
   }
+}
+
+/**
+ * 건물 외곽선 안에 든 층수 문자를 그 건물의 층수로 쓴다.
+ * - 대상 문자: BLDG_FLOORS 레이어, 또는 그 건물과 같은 레이어에 적힌 숫자 문자
+ * - 레이어 접미사(_15F)보다 우선한다 — 동마다 적은 값이 더 구체적이기 때문
+ * - 한 건물 안에 서로 다른 층수가 둘 이상이면 가장 큰 값을 쓰고 알린다
+ * @returns 층수 문자로 층수가 정해진 동 수
+ */
+function applyFloorTexts(
+  buildings: Building[],
+  sourceLayers: string[],
+  texts: { x: number; y: number; floors: number; layer: string }[],
+  warnings: string[],
+): number {
+  if (texts.length === 0) return 0;
+  let applied = 0;
+  const conflicts: string[] = [];
+  const used = new Set<number>();
+  buildings.forEach((b, i) => {
+    const xs = b.footprint.map((p) => p.x);
+    const ys = b.footprint.map((p) => p.y);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const hits: number[] = [];
+    texts.forEach((t, k) => {
+      if (t.layer !== LAYER_FLOOR_TEXT && t.layer !== sourceLayers[i]) return;
+      if (t.x < x0 || t.x > x1 || t.y < y0 || t.y > y1) return;
+      if (!pointInPolygon(t.x, t.y, b.footprint)) return;
+      hits.push(t.floors);
+      used.add(k);
+    });
+    if (hits.length === 0) return;
+    const distinct = [...new Set(hits)];
+    b.floors = Math.max(...distinct);
+    applied++;
+    if (distinct.length > 1) conflicts.push(`${b.name}(${distinct.join("/")}층 → ${b.floors}층)`);
+  });
+  if (conflicts.length > 0) {
+    warnings.push(
+      `한 건물 안에 층수 문자가 서로 다르게 ${conflicts.length}동 적혀 있어 가장 큰 값을 썼습니다: ` +
+        conflicts.slice(0, 8).join(", ") + (conflicts.length > 8 ? " …" : ""),
+    );
+  }
+  const orphan = texts.filter((t, k) => t.layer === LAYER_FLOOR_TEXT && !used.has(k)).length;
+  if (orphan > 0) {
+    warnings.push(
+      `${LAYER_FLOOR_TEXT} 층수 문자 ${orphan}개가 어떤 건물 외곽선 안에도 있지 않아 무시했습니다 — ` +
+        `문자 기준점이 건물 안쪽에 오도록 옮겨 주세요.`,
+    );
+  }
+  return applied;
 }
