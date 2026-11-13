@@ -460,7 +460,8 @@ export function buildWorkbook(
     sheetFromRows(buildNorthSetbackRows(northSetback), [0], [16, 18, 16, 12, 12, 8]),
     "정북사선 결과",
   );
-  XLSX.utils.book_append_sheet(
+  // PV는 화면에서 뺀 기능 — 결과를 넘겼을 때만(옛 호출부·테스트) 시트를 붙인다
+  if (pv || pvEnergy) XLSX.utils.book_append_sheet(
     wb,
     sheetFromRows(
       buildPvRows(pv, pvEnergy),

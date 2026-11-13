@@ -160,15 +160,27 @@ function initHelpHint(): void {
   if (!hint) return;
   const coarse = window.matchMedia("(pointer: coarse)").matches;
   hint.innerHTML = coarse
-    ? "한 손가락 드래그: 회전 · 두 손가락: 확대/이동<br />" +
-      "계획주동(노랑): 탭해서 선택, 길게 끌어 이동 · 주황 핸들로 회전"
-    : "마우스: 좌드래그 회전 · 휠 줌 · 우드래그 팬<br />" +
-      "계획주동(노랑): 클릭 후 드래그 이동, 선택 시 주황 핸들로 회전";
+    ? "한 손가락: 회전 · 두 손가락: 확대/이동<br />" +
+      "인접건물 벽을 탭하면 그 지점 일조시간 표시"
+    : "좌드래그 회전 · 휠 줌 · 우드래그 이동<br />" +
+      "인접건물 벽을 클릭하면 그 지점 일조시간 표시";
 }
 
 // ---------- 초기화 ----------
 
+/** 좌측 패널 큰 섹션은 한 번에 하나만 펼친다 — 여러 개가 열려 길게 늘어지는 것을 막는다 */
+function initAccordion(): void {
+  const items = document.querySelectorAll<HTMLDetailsElement>("#left-panel details.lp-acc");
+  for (const d of items) {
+    d.addEventListener("toggle", () => {
+      if (!d.open) return;
+      for (const o of items) if (o !== d && o.open) o.open = false;
+    });
+  }
+}
+
 export function initShell(): void {
+  initAccordion();
   drawerMedia = window.matchMedia(DRAWER_QUERY);
 
   for (const side of ["left", "right"] as Side[]) {

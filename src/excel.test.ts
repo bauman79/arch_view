@@ -42,13 +42,12 @@ function cell(ws: XLSX.WorkSheet, addr: string): XLSX.CellObject | undefined {
 }
 
 describe("엑셀 내보내기 round-trip", () => {
-  it("시트 7개 (배치 개요 · 일조권 · 정북사선 · PV · 바람길분석 · LBM · 일조시간)", () => {
+  it("시트 6개 (배치 개요 · 일조권 · 정북사선 · 바람길분석 · LBM · 일조시간) — PV는 결과 있을 때만", () => {
     const wb = roundTrip(buildWorkbook(mkProject(), null, null, null));
     expect(wb.SheetNames).toEqual([
       "배치 개요",
       "일조권 검토 결과",
       "정북사선 결과",
-      "PV 결과",
       "바람길분석",
       "LBM 바람 분석",
       "일조시간",
@@ -219,16 +218,15 @@ describe("엑셀 내보내기 round-trip", () => {
     expect((ws["A1"] as any).s?.font?.bold).toBe(true);
     expect((wb.Sheets["일조권 검토 결과"]["A1"] as any).s?.font?.bold).toBe(true);
     expect((wb.Sheets["정북사선 결과"]["A1"] as any).s?.font?.bold).toBe(true);
-    expect((wb.Sheets["PV 결과"]["A1"] as any).s?.font?.bold).toBe(true);
   });
 
-  it("분석 미실행이면 일조권·정북사선·PV 시트는 헤더 + 미실행 표기", () => {
+  it("분석 미실행이면 일조권·정북사선 시트는 헤더 + 미실행 표기, PV 시트는 없음", () => {
     const wb = roundTrip(buildWorkbook(mkProject(), null, null, null));
     expect(cell(wb.Sheets["일조권 검토 결과"], "A1")?.v).toBe("건물명");
     expect(cell(wb.Sheets["일조권 검토 결과"], "A2")?.v).toBe("(일조권 검토 미실행)");
     expect(cell(wb.Sheets["정북사선 결과"], "A1")?.v).toBe("건물명");
     expect(cell(wb.Sheets["정북사선 결과"], "A2")?.v).toBe("(정북사선 검토 미실행)");
-    expect(cell(wb.Sheets["PV 결과"], "A2")?.v).toBe("(PV 분석 미실행)");
+    expect(wb.SheetNames).not.toContain("PV 결과");
   });
 
   it("일조권 검토 결과가 있으면 인접건물별 벽면·지붕 확보율이 채워진다", () => {
@@ -346,8 +344,8 @@ describe("교육·종교시설 일조 시트", () => {
       points: [], summaries: [], noWindows: ["유치원"],
     };
     const wb = buildWorkbook(defaultProject(), null, null, null, null, null, null, null, fac);
-    expect(wb.SheetNames).toHaveLength(8);
-    expect(wb.SheetNames[7]).toBe("교육·종교시설 일조");
+    expect(wb.SheetNames).toHaveLength(7);
+    expect(wb.SheetNames[6]).toBe("교육·종교시설 일조");
   });
 });
 

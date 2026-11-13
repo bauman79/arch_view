@@ -34,12 +34,6 @@ import {
   runNorthSetbackCheck,
   type NorthSetbackResult,
 } from "./northsetback";
-import {
-  createPvOverlay,
-  pvResultToCsv,
-  runPvAnalysis,
-  type PvResult,
-} from "./pv";
 // exportXlsx는 xlsx-js-style(대용량)을 끌고 오므로 클릭 시점 동적 import로 로드한다
 import {
   buildDxfTextForView,
@@ -53,12 +47,7 @@ import {
   VIEW_VERSION,
   type ViewFileData,
 } from "./viewfile";
-import { EPW_FILES, parseEpw, type EpwData } from "./epw";
-import {
-  createPvEnergyOverlay,
-  runPvEnergyAnalysis,
-  type PvEnergyResult,
-} from "./pvenergy";
+import { EPW_FILES } from "./epw";
 import {
   coverageStats,
   createTemplateBuilding,
@@ -141,8 +130,6 @@ import {
   refreshStatusDots,
   renderBuildingList,
   renderLibraryList,
-  renderPvEnergySummary,
-  renderPvSummary,
   renderSetbackSummary,
   renderSiteTotals,
   renderSunHoursMapSummary,
@@ -154,6 +141,7 @@ import {
   renderCompareTable,
   setStatus,
   type BuildingStatus,
+  type UiCallbacks,
 } from "./ui";
 import { initShell, notifyRightPanel } from "./shell";
 import { isDrag } from "./pointer";
@@ -191,10 +179,6 @@ let planLocked = false;
 let facilityRunning = false;
 let facilityGroup: THREE.Group | null = null;
 let sunHoursRunning = false;
-let lastPv: PvResult | null = null;
-let pvRunning = false;
-let lastPvEnergy: PvEnergyResult | null = null;
-let pvEnergyRunning = false;
 let lastWind: WindResult | null = null;
 let lastLbm: LbmResult | null = null;
 let lastSunHoursMap: SunHoursMapResult | null = null;
@@ -465,7 +449,7 @@ function syncUnitsPerFloorFromMix(b: Building): void {
 }
 
 function refreshList(): void {
-  renderBuildingList(project.buildings, selectedId, computeStatusMap(), {
+  renderBuildingList(project.buildings, selectedId, computeStatusMap(), withHistory({
     onParamsChange: (b) => {
       rebuildOne(b);
       updateRotationHandle();
@@ -537,9 +521,103 @@ function refreshList(): void {
       clearFacility("시설 용도·교실 층이 바뀌어 결과가 초기화되었습니다. 다시 실행하세요.");
       refreshList();
     },
-  });
+  }));
   updateSiteTotals();
 }
+
+// ---------- 되돌리기·다시하기 ----------
+// 건물 배치·층수·용도·대지면적 같은 사용자 편집을 통째 스냅샷(JSON)으로 쌓는다.
+// 파일을 새로 열거나 DXF를 불러오면 기록을 새로 시작한다(오버레이·지형까지 되돌리지는 않음).
+
+const HISTORY_MAX = 80;
+let history: string[] = [];
+let historyIdx = -1;
+const undoBtn = document.getElementById("undo-btn") as HTMLButtonElement;
+const redoBtn = document.getElementById("redo-btn") as HTMLButtonElement;
+
+function historySnapshot(): string {
+  return JSON.stringify({ buildings: project.buildings, siteAreaM2: project.site.siteAreaM2 });
+}
+
+function updateUndoButtons(): void {
+  undoBtn.disabled = historyIdx <= 0;
+  redoBtn.disabled = historyIdx >= history.length - 1;
+}
+
+function resetHistory(): void {
+  history = [historySnapshot()];
+  historyIdx = 0;
+  updateUndoButtons();
+}
+
+/** 편집이 끝난 시점에 부른다 — 바뀐 게 없으면 쌓지 않는다 */
+function commitHistory(): void {
+  const snap = historySnapshot();
+  if (history[historyIdx] === snap) return;
+  history = history.slice(0, historyIdx + 1);
+  history.push(snap);
+  if (history.length > HISTORY_MAX) history.shift();
+  historyIdx = history.length - 1;
+  updateUndoButtons();
+}
+
+function restoreHistory(idx: number): void {
+  if (idx < 0 || idx >= history.length) return;
+  const d = JSON.parse(history[idx]) as { buildings: Building[]; siteAreaM2: number };
+  historyIdx = idx;
+  project.buildings = d.buildings;
+  project.site.siteAreaM2 = d.siteAreaM2;
+  siteAreaInput.value = String(d.siteAreaM2);
+  if (selectedId && !project.buildings.some((b) => b.id === selectedId)) selectedId = null;
+  hideSunProbe();
+  rebuildAll();
+  refreshList();
+  updateRotationHandle();
+  invalidateAnalysis();
+  updateSetbackChecks();
+  updateSiteTotals();
+  updateUndoButtons();
+}
+
+function undo(): void {
+  if (historyIdx <= 0) return;
+  restoreHistory(historyIdx - 1);
+  setStatus("되돌렸습니다.");
+}
+
+function redo(): void {
+  if (historyIdx >= history.length - 1) return;
+  restoreHistory(historyIdx + 1);
+  setStatus("다시 실행했습니다.");
+}
+
+/** 목록·상세 패널 편집 콜백이 끝날 때마다 기록을 쌓도록 감싼다 (선택·조회용 콜백은 제외) */
+function withHistory(cb: UiCallbacks): UiCallbacks {
+  const skip = new Set(["onSelect", "isPlanLocked", "onTogglePlanLock"]);
+  const out = { ...cb } as Record<string, unknown>;
+  for (const [k, fn] of Object.entries(cb)) {
+    if (skip.has(k) || typeof fn !== "function") continue;
+    out[k] = (...args: unknown[]) => {
+      const r = (fn as (...a: unknown[]) => unknown)(...args);
+      commitHistory();
+      return r;
+    };
+  }
+  return out as unknown as UiCallbacks;
+}
+
+undoBtn.addEventListener("click", undo);
+redoBtn.addEventListener("click", redo);
+document.addEventListener("keydown", (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod) return;
+  const t = e.target as HTMLElement | null;
+  // 입력칸 안에서는 브라우저 기본 되돌리기(글자 단위)를 쓴다
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+  const k = e.key.toLowerCase();
+  if (k === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+  else if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); redo(); }
+});
 
 /** 장면에서 건물 인스턴스 하나를 제거 (라이브러리에는 영향 없음 — 다시 추가 가능) */
 function deleteBuilding(b: Building): void {
@@ -715,6 +793,8 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     if (warnings.length > 0) msg += ` (알림 ${warnings.length}건 — "자세히")`;
     setStatus(msg, warnings.length > 0 ? warnings.join("\n\n") : undefined);
     for (const w of warnings) console.warn("[DXF]", w);
+    if (merge) commitHistory();
+    else resetHistory();
     if (planBuildings.length > 0) askPlanLock(planBuildings.length);
   } catch (err) {
     setStatus(`불러오기 실패: ${(err as Error).message}`);
@@ -759,10 +839,6 @@ const sampleLibrary: Building[] = SAMPLE_TEMPLATES.map(({ massType, floors }) =>
   return b;
 });
 
-function findLibraryBuilding(id: string): Building | undefined {
-  return sampleLibrary.find((b) => b.id === id) ?? project.buildingLibrary.find((b) => b.id === id);
-}
-
 function refreshLibraryList(): void {
   renderLibraryList([...sampleLibrary, ...project.buildingLibrary], libraryCheckedIds, (id, checked) => {
     if (checked) libraryCheckedIds.add(id);
@@ -785,46 +861,6 @@ function cloneBuildingFromLibrary(lib: Building, stagger: number): Building {
   return clone;
 }
 
-function addLibrarySelectionToScene(): void {
-  if (planLocked && libraryCheckedIds.size > 0) setPlanLocked(false, true);
-  if (libraryCheckedIds.size === 0) {
-    setStatus("장면에 추가할 건물을 라이브러리에서 선택하세요.");
-    return;
-  }
-  let added = 0;
-  for (const libId of libraryCheckedIds) {
-    const lib = findLibraryBuilding(libId);
-    if (!lib) continue;
-    const existingCount = [...cloneOrigin.values()].filter((v) => v === libId).length;
-    const clone = cloneBuildingFromLibrary(lib, existingCount > 0 ? -20 * existingCount : 0);
-    project.buildings.push(clone);
-    added++;
-  }
-  if (added === 0) return;
-  rebuildAll();
-  viewer.fitToBuildings();
-  refreshList();
-  updateRotationHandle();
-  invalidateAnalysis();
-  updateSetbackChecks();
-  updateSiteTotals();
-  setStatus(`장면에 ${added}동 추가됨`);
-}
-
-document.getElementById("library-select-all")!.addEventListener("click", () => {
-  for (const b of [...sampleLibrary, ...project.buildingLibrary]) libraryCheckedIds.add(b.id);
-  refreshLibraryList();
-});
-
-document.getElementById("library-select-none")!.addEventListener("click", () => {
-  libraryCheckedIds.clear();
-  refreshLibraryList();
-});
-
-document.getElementById("library-add-scene")!.addEventListener("click", () => {
-  addLibrarySelectionToScene();
-});
-
 document.getElementById("dxf-file")!.addEventListener("change", async (e) => {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -839,17 +875,6 @@ document.getElementById("dxf-file-add")!.addEventListener("change", async (e) =>
   if (!file) return;
   loadDxfText(await file.text(), file.name, true);
   input.value = "";
-});
-
-document.getElementById("load-sample")!.addEventListener("click", async () => {
-  const res = await fetch("/sample_site.dxf");
-  if (!res.ok) {
-    setStatus("샘플 파일을 찾을 수 없습니다.");
-    return;
-  }
-  // 샘플은 data/DXF_RULES.md 규약에 따라 mm 단위($INSUNITS=4)로 작성됨 — 자동감지로 확인
-  (document.getElementById("unit-select") as HTMLSelectElement).value = "auto";
-  loadDxfText(await res.text(), "샘플 배치도", false);
 });
 
 // ---------- 레이어 규약 모달 ----------
@@ -906,16 +931,6 @@ function invalidateAnalysis(): void {
     renderSunHoursSummary(null, undefined, note);
     refreshStatusDots(computeStatusMap());
   }
-  if (lastPv) {
-    lastPv = null;
-    clearGroup(pvRoot);
-    renderPvSummary(null, note);
-  }
-  if (lastPvEnergy) {
-    lastPvEnergy = null;
-    clearGroup(pvEnergyRoot);
-    renderPvEnergySummary(null, note);
-  }
   if (lastWind) {
     lastWind = null;
     clearWindOverlay();
@@ -956,185 +971,6 @@ function clearGroup(root: THREE.Group): void {
     }
   }
 }
-
-// ---------- 태양광(PV) 상대평가 (M4) ----------
-// 모드 B 1단계: 대표일 4일(춘분·하지·추분·동지) 직달 누적 + 입사각 보정 히트맵.
-// 계산량이 M2보다 커서 청크 비동기 처리 — 진행률을 상태바에 표시한다.
-
-/** M4 오버레이 루트 — M3와 분리 */
-const pvRoot = new THREE.Group();
-viewer.scene.add(pvRoot);
-
-const runPvBtn = document.getElementById("run-pv") as HTMLButtonElement;
-
-runPvBtn.addEventListener("click", async () => {
-  if (pvRunning) return;
-  if (project.buildings.length === 0) {
-    setStatus("먼저 DXF를 불러오세요.");
-    return;
-  }
-  syncAnalysisSettings();
-  clearGroup(pvRoot);
-  lastPv = null;
-  // M5 오버레이와 같은 면에 겹치면 z-fighting — 한쪽만 표시
-  if (lastPvEnergy) {
-    lastPvEnergy = null;
-    clearGroup(pvEnergyRoot);
-    renderPvEnergySummary(null, "PV 상대평가 히트맵과 겹쳐 M5 결과를 지웠습니다.");
-  }
-  pvRunning = true;
-  runPvBtn.disabled = true;
-  setStatus("PV 분석 중… 0%");
-  try {
-    const t0 = performance.now();
-    const result = await runPvAnalysis(project, (done, total) => {
-      setStatus(`PV 분석 중… ${Math.round((done / total) * 100)}%`);
-    });
-    lastPv = result;
-    const ms = performance.now() - t0;
-    pvRoot.add(createPvOverlay(result.cells, result.results));
-    renderPvSummary(
-      result.summaries,
-      `격자 ${result.cells.length}셀 × ${result.samplesPerDay}시각 × 4일 · ` +
-        `${(ms / 1000).toFixed(1)}초 · 기준 최대 유효 ${result.maxEffective.toFixed(1)}h`,
-    );
-    setStatus(
-      `PV 분석 완료 — ${result.cells.length}셀 (파랑=낮음 → 노랑 → 빨강=높음, 최대값 대비 %)`,
-    );
-  } catch (err) {
-    setStatus(`PV 분석 실패: ${(err as Error).message}`);
-    console.error(err);
-  } finally {
-    pvRunning = false;
-    runPvBtn.disabled = false;
-  }
-});
-
-document.getElementById("clear-pv")!.addEventListener("click", () => {
-  lastPv = null;
-  clearGroup(pvRoot);
-  renderPvSummary(null);
-  setStatus("PV 결과를 지웠습니다.");
-});
-
-document.getElementById("export-pv-csv")!.addEventListener("click", async () => {
-  if (!lastPv) {
-    setStatus("먼저 PV 분석을 실행하세요.");
-    return;
-  }
-  // BOM을 붙여 엑셀에서 한글이 깨지지 않게 한다
-  const csv =
-    "\ufeff" + pvResultToCsv(lastPv, project.buildings, project.site.northAngle);
-  const outcome = await shareOrDownloadText(
-    csv,
-    `pv_relative_${project.analysis.date.slice(0, 4)}.csv`,
-    "text/csv;charset=utf-8",
-    "arch_view PV 분석",
-  );
-  if (outcome === "cancelled") {
-    setStatus("공유 취소됨");
-    return;
-  }
-  setStatus(
-    `CSV ${outcome === "shared" ? "공유함" : "내보냄"} — ${lastPv.cells.length}셀 ` +
-      `(좌표·법선·직달시간·유효량·상대효율)`,
-  );
-});
-
-// ---------- 태양광(PV) 절대평가 — TMY 기상데이터 (M5) ----------
-// 모드 B 2단계: EPW 8,760시간 직달(레이캐스팅)+산란(등방성) → 연간 kWh/m².
-// M4보다 시각 수가 ~18배라 진행률 필수 — 청크 비동기 처리.
-
-/** M5 오버레이 루트 — M2·M4와 분리 */
-const pvEnergyRoot = new THREE.Group();
-viewer.scene.add(pvEnergyRoot);
-
-const epwSelect = document.getElementById("epw-select") as HTMLSelectElement;
-for (const { file, label } of EPW_FILES) {
-  const opt = document.createElement("option");
-  opt.value = file;
-  opt.textContent = label;
-  epwSelect.appendChild(opt);
-}
-
-/** 파일별 파싱 결과 캐시 — 재실행 시 fetch·파싱 생략 */
-const epwCache = new Map<string, EpwData>();
-
-async function loadEpw(file: string): Promise<EpwData> {
-  const cached = epwCache.get(file);
-  if (cached) return cached;
-  const res = await fetch(`/data/${file}`);
-  if (!res.ok) throw new Error(`EPW 파일을 불러올 수 없습니다: ${file}`);
-  const epw = parseEpw(await res.text());
-  epwCache.set(file, epw);
-  // 검증용 콘솔 출력 (plan.md M5 검증 1 — 인천 1월 1일 12시 DNI=710 확인)
-  const jan1 = epw.hours.find((h) => h.month === 1 && h.day === 1 && h.hour === 12);
-  console.log(
-    `[EPW] ${epw.location.name} (위도 ${epw.location.latitude}, 경도 ${epw.location.longitude})` +
-      ` — 1월 1일 12시 DNI=${jan1?.dni} DHI=${jan1?.dhi} GHI=${jan1?.ghi} W/m²` +
-      ` · 연간 GHI ${epw.annual.ghiKwh.toFixed(0)} kWh/m²`,
-  );
-  return epw;
-}
-
-const runPvAbsBtn = document.getElementById("run-pv-abs") as HTMLButtonElement;
-
-runPvAbsBtn.addEventListener("click", async () => {
-  if (pvEnergyRunning) return;
-  if (project.buildings.length === 0) {
-    setStatus("먼저 DXF를 불러오세요.");
-    return;
-  }
-  syncAnalysisSettings();
-  clearGroup(pvEnergyRoot);
-  lastPvEnergy = null;
-  // 같은 면의 M4 오버레이와 z-fighting — 한쪽만 표시
-  if (lastPv) {
-    lastPv = null;
-    clearGroup(pvRoot);
-    renderPvSummary(null, "M5 히트맵과 겹쳐 PV 상대평가 결과를 지웠습니다.");
-  }
-  pvEnergyRunning = true;
-  runPvAbsBtn.disabled = true;
-  const label =
-    epwSelect.selectedOptions[0]?.textContent ?? epwSelect.value;
-  try {
-    setStatus(`M5 절대평가 — ${label} EPW 불러오는 중…`);
-    const epw = await loadEpw(epwSelect.value);
-    setStatus("M5 절대평가 계산 중… 0%");
-    const t0 = performance.now();
-    const result = await runPvEnergyAnalysis(project, epw, label, (done, total) => {
-      setStatus(`M5 절대평가 계산 중… ${Math.round((done / total) * 100)}%`);
-    });
-    lastPvEnergy = result;
-    const ms = performance.now() - t0;
-    pvEnergyRoot.add(
-      createPvEnergyOverlay(result.cells, result.results, result.maxKwh),
-    );
-    renderPvEnergySummary(
-      result.summaries,
-      `${label} TMY (관측소 ${result.station.name}, 위도 ${result.station.latitude}°)` +
-        ` · 격자 ${result.cells.length}셀 × 레이캐스팅 ${result.rayHourCount}시각(고도>5°)` +
-        ` · ${(ms / 1000).toFixed(1)}초 · 색상 스케일 0~${result.maxKwh.toFixed(0)} kWh/㎡·년`,
-    );
-    setStatus(
-      `M5 절대평가 완료 — 최대 ${result.maxKwh.toFixed(0)} kWh/㎡·년 (파랑=0 → 빨강=최대)`,
-    );
-  } catch (err) {
-    setStatus(`M5 절대평가 실패: ${(err as Error).message}`);
-    console.error(err);
-  } finally {
-    pvEnergyRunning = false;
-    runPvAbsBtn.disabled = false;
-  }
-});
-
-document.getElementById("clear-pv-abs")!.addEventListener("click", () => {
-  lastPvEnergy = null;
-  clearGroup(pvEnergyRoot);
-  renderPvEnergySummary(null);
-  setStatus("M5 결과를 지웠습니다.");
-});
 
 // ---------- 정북사선·채광사선·인동거리 검토 (M2/M3) ----------
 // 셋 다 태양과 무관한 순수 기하 계산 — 정북사선은 항상 자동 계산되고,
@@ -1810,7 +1646,10 @@ function updateSiteTotals(): void {
   renderSiteTotals(project.buildings, project.site.siteAreaM2);
 }
 
-siteAreaInput.addEventListener("change", updateSiteTotals);
+siteAreaInput.addEventListener("change", () => {
+  updateSiteTotals();
+  commitHistory();
+});
 
 document.getElementById("export-xlsx")!.addEventListener("click", async () => {
   if (project.buildings.length === 0) {
@@ -1827,8 +1666,8 @@ document.getElementById("export-xlsx")!.addEventListener("click", async () => {
       project,
       lastSunHours,
       lastNorthSetback,
-      lastPv,
-      lastPvEnergy,
+      null,
+      null,
       lastWind,
       lastSunHoursMap,
       lastLbm,
@@ -2000,6 +1839,7 @@ function applyViewData(d: ViewFileData): void {
   updateSetbackChecks();
   updateSiteTotals();
   updateSunFromSlider();
+  resetHistory();
 }
 
 // ---------- 새로 시작하기 (초기화) ----------
@@ -2369,6 +2209,7 @@ canvas.addEventListener("pointerup", (e) => {
   if (rotate) {
     // 실제로 돌렸을 때만 보고 — 핸들을 스치기만 해도 "회전 0.0°"가 뜨던 오보 방지
     if (rotate.moved) {
+      commitHistory();
       setStatus(
         `${rotate.building.name} 회전: ${rotate.building.offset.rotation.toFixed(1)}°`,
       );
@@ -2385,6 +2226,7 @@ canvas.addEventListener("pointerup", (e) => {
   }
   if (drag) {
     if (drag.moved) {
+      commitHistory();
       setStatus(
         `${drag.building.name} 이동: (${drag.building.offset.dx.toFixed(1)}, ${drag.building.offset.dy.toFixed(1)})m`,
       );
@@ -2647,6 +2489,7 @@ refreshLibraryList();
 syncAnalysisSettings();
 updateSunFromSlider();
 updateSetbackChecks();
+resetHistory();
 
 // 개발용 디버그 훅
 if (import.meta.env.DEV) {
@@ -2673,10 +2516,6 @@ if (import.meta.env.DEV) {
     totalUnits,
     unitBreakdown,
     siteUnitTotals,
-    getLastPv: () => lastPv,
-    // M5
-    getLastPvEnergy: () => lastPvEnergy,
-    loadEpw,
     // M8
     loadWindRose,
     computeWindField,
