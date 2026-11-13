@@ -8,6 +8,7 @@ import { segmentLiesOnEdge, WINDOW_MATCH_TOLERANCE } from "./windows";
 import type {
   Building,
   BuildingType,
+  FacilityUse,
   OverlayLayer,
   OverlayLine,
   Point2,
@@ -71,6 +72,22 @@ export function parseFloorText(raw: string): number | null {
   return n >= 1 && n <= 200 ? n : null;
 }
 
+/** 시설 용도 문자 전용 레이어 — 건물 외곽선 안에 "유치원"·"초등학교"·"교회"로 적는다 */
+export const LAYER_USE_TEXT = "BLDG_USE";
+
+/** 용도 문자 해석 — 한글·영문 모두. 그 외는 null */
+export function parseUseText(raw: string): FacilityUse | null {
+  const plain = raw
+    .replace(/\\[A-Za-z][^;\\]*;/g, "")
+    .replace(/\\P/g, " ")
+    .replace(/[{}\s]/g, "")
+    .toUpperCase();
+  if (/유치원|어린이집|KINDER/.test(plain)) return "kindergarten";
+  if (/초등학교|중학교|고등학교|학교|SCHOOL/.test(plain)) return "school";
+  if (/교회|성당|사찰|예배|CHURCH/.test(plain)) return "church";
+  return null;
+}
+
 /** 엑셀 열 이름 방식 1→A, 26→Z, 27→AA — 인접건물이 26동을 넘어도 이름이 깨지지 않게 */
 export function letterSeq(n: number): string {
   let s = "";
@@ -98,6 +115,8 @@ export interface DxfLoadResult {
   unitScale: number;
   /** 건물 안 층수 문자로 층수가 정해진 동 수 */
   floorsFromText: number;
+  /** BLDG_USE 용도 문자로 시설 용도가 정해진 동 수 */
+  usesFromText: number;
   /** UNIT_<평형> 전용공간으로 세대 구성이 정해진 동 수 */
   unitsFromDrawing: number;
   /** 배율을 어떻게 정했는지 — 상태 표시용 */
@@ -293,9 +312,21 @@ export function parseDxfBuildings(
   const unitPolys: { unitType: string; points: Point2[] }[] = [];
   /** 층수 문자 후보 (도면 좌표 m) — 건물이 정해진 뒤 외곽선 안에 든 것을 찾아 층수로 쓴다 */
   const floorTexts: { x: number; y: number; floors: number; layer: string }[] = [];
+  /** 시설 용도 문자 (BLDG_USE) */
+  const useTexts: { x: number; y: number; use: FacilityUse }[] = [];
 
   for (const entity of dxf.entities as any[]) {
     if (entity.type === "TEXT" || entity.type === "MTEXT") {
+      const textLayer = String(entity.layer ?? "").toUpperCase();
+      if (textLayer === LAYER_USE_TEXT) {
+        const use = parseUseText(String(entity.text ?? ""));
+        const pt = textAnchor(entity);
+        if (use && pt) {
+          const ez: number = entity.extrusionDirectionZ ?? entity.extrusionDirection?.z ?? 1;
+          useTexts.push({ x: pt.x * (ez < 0 ? -1 : 1) * unitScale, y: pt.y * unitScale, use });
+        }
+        continue;
+      }
       const floors = parseFloorText(String(entity.text ?? ""));
       if (floors === null) continue;
       // TEXT는 정렬 지정(72/73)이 있으면 두 번째 정렬점(11)이 실제 기준 위치다
@@ -596,10 +627,48 @@ export function parseDxfBuildings(
 
   const floorsFromText = applyFloorTexts(buildings, sourceLayers, floorTexts, warnings);
   const unitsFromDrawing = applyUnitPolygons(buildings, unitPolys, warnings);
+  const usesFromText = applyUseTexts(buildings, useTexts, warnings);
 
   return {
     buildings, overlays, contourPoints, warnings, unitScale, unitSource, floorsFromText, unitsFromDrawing,
+    usesFromText,
   };
+}
+
+/** TEXT는 정렬 지정(72/73)이 있으면 두 번째 정렬점(11)이 실제 기준 위치다 */
+function textAnchor(entity: any): { x: number; y: number } | null {
+  const aligned = entity.type === "TEXT" && ((entity.halign ?? 0) !== 0 || (entity.valign ?? 0) !== 0);
+  const pt = entity.type === "MTEXT"
+    ? entity.position
+    : aligned && entity.endPoint ? entity.endPoint : entity.startPoint;
+  return pt ?? null;
+}
+
+/** 건물 외곽선 안의 BLDG_USE 문자로 시설 용도를 정한다 */
+function applyUseTexts(
+  buildings: Building[],
+  texts: { x: number; y: number; use: FacilityUse }[],
+  warnings: string[],
+): number {
+  if (texts.length === 0) return 0;
+  let applied = 0;
+  const used = new Set<number>();
+  for (const b of buildings) {
+    texts.forEach((t, k) => {
+      if (used.has(k) || !pointInPolygon(t.x, t.y, b.footprint)) return;
+      b.use = t.use;
+      used.add(k);
+    });
+    if (b.use) applied++;
+  }
+  const orphan = texts.length - used.size;
+  if (orphan > 0) {
+    warnings.push(
+      `${LAYER_USE_TEXT} 용도 문자 ${orphan}개가 어떤 건물 외곽선 안에도 있지 않아 무시했습니다 — ` +
+        `문자 기준점이 건물 안쪽에 오도록 옮겨 주세요.`,
+    );
+  }
+  return applied;
 }
 
 /**

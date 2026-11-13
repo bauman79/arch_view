@@ -72,6 +72,13 @@ import {
 import { createSpacingOverlay, runSpacingCheck, type SpacingResult } from "./spacing";
 import { formatMinutes, localDate, sunPosition } from "./sun";
 import {
+  createFacilityOverlay,
+  defaultFacilitySettings,
+  disposeFacilityOverlay,
+  runFacilityCheck,
+  type FacilityResult,
+} from "./facility";
+import {
   createSunHoursOverlay,
   judgeBuilding,
   runSunHoursCheck,
@@ -136,6 +143,7 @@ import {
   renderSiteTotals,
   renderSunHoursMapSummary,
   renderSunHoursSummary,
+  renderFacilitySummary,
   renderWindSummary,
   renderLbmSummary,
   renderSchemeList,
@@ -173,6 +181,9 @@ const groups = new Map<string, THREE.Group>();
 let selectedId: string | null = null;
 let lastNorthSetback: NorthSetbackResult | null = null;
 let lastSunHours: SunHoursResult | null = null;
+let lastFacility: FacilityResult | null = null;
+let facilityRunning = false;
+let facilityGroup: THREE.Group | null = null;
 let sunHoursRunning = false;
 let lastPv: PvResult | null = null;
 let pvRunning = false;
@@ -393,6 +404,12 @@ function computeStatusMap(): Map<string, BuildingStatus> {
       cur.sh = judgeBuilding(s, lastSunHours.passRatio);
     }
   }
+  if (lastFacility) {
+    for (const s of lastFacility.summaries) {
+      const cur = map.get(s.buildingId);
+      if (cur) cur.fac = s.affected ? "fail" : "pass";
+    }
+  }
   if (lastDaylight) {
     const allPass = new Map<string, boolean>();
     for (const c of lastDaylight.checks) {
@@ -508,6 +525,10 @@ function refreshList(): void {
     },
     onDelete: (b) => deleteBuilding(b),
     onDuplicate: (b) => duplicateBuilding(b),
+    onFacilityChange: () => {
+      clearFacility("시설 용도·교실 층이 바뀌어 결과가 초기화되었습니다. 다시 실행하세요.");
+      refreshList();
+    },
   });
   updateSiteTotals();
 }
@@ -860,6 +881,19 @@ function invalidateAnalysis(): void {
     clearSunHoursMapOverlay();
     renderSunHoursMapSummary(null, note);
   }
+  if (lastFacility) clearFacility(note);
+}
+
+/** 교육·종교시설 창문 일조 결과 지우기 */
+function clearFacility(note?: string): void {
+  const had = lastFacility !== null;
+  lastFacility = null;
+  if (facilityGroup) {
+    disposeFacilityOverlay(facilityGroup);
+    facilityGroup = null;
+  }
+  renderFacilitySummary(null, note);
+  if (had) refreshStatusDots(computeStatusMap());
 }
 
 function clearGroup(root: THREE.Group): void {
@@ -1300,6 +1334,75 @@ document.getElementById("clear-sunhours")!.addEventListener("click", () => {
   setStatus("일조권 검토 결과를 지웠습니다.");
 });
 
+// ---------- 교육·종교시설 창문 일조 (유치원·초등학교·교회) ----------
+// 인접건물 중 용도를 지정한 동의 ADJ_WIN 창 × 교실 층마다 사업 전·후 일조시간을 비교한다.
+
+const facilityHeightInput = document.getElementById("facility-height") as HTMLInputElement;
+const facilityWindowSelect = document.getElementById("facility-window") as HTMLSelectElement;
+const runFacilityBtn = document.getElementById("run-facility") as HTMLButtonElement;
+
+function syncFacilitySettings(): void {
+  const h = parseFloat(facilityHeightInput.value);
+  project.analysis.facility = {
+    windowHeightM: Math.min(3, Math.max(0, Number.isFinite(h) ? h : 1.2)),
+    schoolContinuousWindow: facilityWindowSelect.value === "9-13" ? "9-13" : "9-15",
+  };
+}
+
+for (const el of [facilityHeightInput, facilityWindowSelect]) {
+  el.addEventListener("change", () => {
+    syncFacilitySettings();
+    if (lastFacility) clearFacility("설정이 바뀌어 결과가 초기화되었습니다. 다시 실행하세요.");
+  });
+}
+
+runFacilityBtn.addEventListener("click", async () => {
+  if (facilityRunning) return;
+  const targets = project.buildings.filter((b) => b.type === "인접건물" && b.use);
+  if (targets.length === 0) {
+    setStatus("용도(유치원·초등학교·교회)를 지정한 인접건물이 없습니다 — 건물을 선택해 상세 패널에서 용도를 고르세요.");
+    return;
+  }
+  syncAnalysisSettings();
+  syncSunHoursSettings();
+  syncFacilitySettings();
+  clearFacility();
+  facilityRunning = true;
+  runFacilityBtn.disabled = true;
+  setStatus("교육·종교시설 일조 검토 중… 0%");
+  try {
+    const t0 = performance.now();
+    const r = await runFacilityCheck(project, (done, total) => {
+      setStatus(`교육·종교시설 일조 검토 중… ${Math.round((done / total) * 100)}%`);
+    });
+    lastFacility = r;
+    facilityGroup = createFacilityOverlay(r.points);
+    viewer.scene.add(facilityGroup);
+    const sec = ((performance.now() - t0) / 1000).toFixed(1);
+    renderFacilitySummary(r, `기준일 ${r.date} · ${r.timeStep}분 간격 · 측정점 ${r.points.length}개 · ${sec}초`);
+    const affected = r.summaries.filter((s) => s.affected).length;
+    setStatus(
+      r.summaries.length === 0
+        ? "검토할 창이 없습니다 — 시설 동에 ADJ_WIN 창 표시가 필요합니다."
+        : `교육·종교시설 일조 검토 완료 — ${r.summaries.length}동 중 사업 영향 ${affected}동 ` +
+          `(파랑=확보, 빨강=사업으로 미달, 주황=기존 미달·추가 감소, 회색=기존 미달)`,
+    );
+    refreshStatusDots(computeStatusMap());
+  } catch (err) {
+    setStatus(`교육·종교시설 일조 검토 실패: ${(err as Error).message}`);
+    console.error(err);
+  } finally {
+    facilityRunning = false;
+    runFacilityBtn.disabled = false;
+  }
+});
+
+document.getElementById("clear-facility")!.addEventListener("click", () => {
+  clearFacility();
+  refreshStatusDots(computeStatusMap());
+  setStatus("교육·종교시설 일조 결과를 지웠습니다.");
+});
+
 // ---------- 바람길 분석 (M8) ----------
 // EPW 풍향·풍속 통계(주풍향) + 2D 포텐셜 흐름 근사 — CFD가 아닌 개략 검토.
 // 속도장·스트림라인은 결정적 계산이라 즉시 완료되지만, 배치가 바뀌면 무효화된다.
@@ -1678,6 +1781,7 @@ document.getElementById("export-xlsx")!.addEventListener("click", async () => {
       lastWind,
       lastSunHoursMap,
       lastLbm,
+      lastFacility,
     );
     const filename = xlsxFilename();
     const outcome = await shareOrDownload(
@@ -1807,6 +1911,9 @@ function applyProjectToInputs(): void {
   sunHoursStepInput.value = String(project.analysis.sunHours.timeStep);
   sunHoursRoadOnlyInput.checked = project.analysis.sunHours.roadFacingOnly ?? true;
   sunHoursPassRatioInput.value = String(Math.round((project.analysis.sunHours.passRatio ?? 0.5) * 100));
+  const fac = project.analysis.facility ?? defaultFacilitySettings();
+  facilityHeightInput.value = String(fac.windowHeightM);
+  facilityWindowSelect.value = fac.schoolContinuousWindow;
 }
 
 /**

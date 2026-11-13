@@ -453,6 +453,18 @@ describe("층수 문자", () => {
     expect(r.floorsFromText).toBe(2);
   });
 
+  it("BLDG_USE 문자로 시설 용도를 지정한다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("ADJ_BLDG", 0, 0, 10000, 10000) +
+        rectEntity("ADJ_BLDG", 20000, 0, 30000, 10000) +
+        textEntity("BLDG_USE", 5000, 5000, "유치원"),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings.map((b) => b.use)).toEqual(["kindergarten", undefined]);
+    expect(r.usesFromText).toBe(1);
+  });
+
   it("문자가 없는 동은 기본 1층", () => {
     const text = dxfText({
       entities:

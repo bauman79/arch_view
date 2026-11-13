@@ -82,7 +82,23 @@ export interface Building {
    * (PLAN.md M7 방침 2). 지형 없거나 미계산이면 undefined = 0 (평지).
    */
   terrainElevation?: number;
+  /**
+   * 교육·종교시설 일조 검토 대상 용도 (인접건물). 없으면 일반 건물.
+   * 도면에서는 BLDG_USE 레이어 문자(유치원·초등학교·교회)로 지정하거나 상세 패널에서 고른다.
+   */
+  use?: FacilityUse;
+  /** 교실(예배실) 층 범위 — 1부터, 양끝 포함. 없으면 전 층 */
+  classFloors?: { from: number; to: number };
 }
+
+/** 일조 검토가 따로 필요한 시설 용도 */
+export type FacilityUse = "kindergarten" | "school" | "church";
+
+export const FACILITY_USE_LABEL: Record<FacilityUse, string> = {
+  kindergarten: "유치원",
+  school: "초등학교",
+  church: "교회",
+};
 
 /** DXF 규약(data/DXF_RULES.md)의 참고용 2D 오버레이 레이어 — 건물 매스로 압출되지 않는다 */
 export type OverlayLayer =
@@ -180,6 +196,14 @@ export interface SunHoursSettings {
   passRatio?: number;
 }
 
+/** 교육·종교시설 창문 일조 검토 설정 */
+export interface FacilitySunSettings {
+  /** 측정 높이 — 각 층 바닥에서 창 중심까지 (m). 기본 1.2 */
+  windowHeightM: number;
+  /** 유치원·초등학교 연속 일조 구간 — "9-15"(교육환경보호법 시행규칙 일반) 또는 "9-13"(일부 교육청 강화 운영) */
+  schoolContinuousWindow: "9-15" | "9-13";
+}
+
 export interface AnalysisSettings {
   /** PV(M4/M5)·일조권 검토 공용 격자 간격 (m) */
   gridSize: number;
@@ -187,6 +211,8 @@ export interface AnalysisSettings {
   date: string;
   setbackRules: SetbackRules;
   sunHours: SunHoursSettings;
+  /** 없으면(옛 .view) 기본값 */
+  facility?: FacilitySunSettings;
 }
 
 export interface Project {
@@ -239,6 +265,7 @@ export function defaultProject(): Project {
         roadFacingOnly: true,
         passRatio: 0.5,
       },
+      facility: { windowHeightM: 1.2, schoolContinuousWindow: "9-15" },
     },
   };
 }

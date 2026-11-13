@@ -17,7 +17,14 @@ import type { SunHoursBuildingSummary } from "./sunhours";
 import type { SunHoursMapResult } from "./sunhoursmap";
 import { windDirLabel, type WindResult } from "./wind";
 import type { LbmResult } from "./lbm";
-import { buildingHeight, mirrorLabel, type Building } from "./types";
+import {
+  FACILITY_STATUS_LABEL,
+  facilityRuleLabel,
+  facilityStatusColor,
+  type FacilityPointStatus,
+  type FacilityResult,
+} from "./facility";
+import { buildingHeight, FACILITY_USE_LABEL, mirrorLabel, type Building, type FacilityUse } from "./types";
 import {
   formatSavedAt,
   maxOf,
@@ -47,6 +54,8 @@ export interface UiCallbacks {
   onDelete(b: Building): void;
   /** 같은 footprint의 새 인스턴스를 장면에 복제 */
   onDuplicate(b: Building): void;
+  /** 인접건물 시설 용도·교실 층 변경 — 교육·종교시설 일조 결과 무효화 */
+  onFacilityChange(b: Building): void;
 }
 
 /** 건물별 법적 검토 상태 도트 4종 — 접힌 아코디언 행에서도 한눈에 보이도록 */
@@ -61,10 +70,12 @@ export interface BuildingStatus {
   m3s: DotStatus;
   /** 일조권(수인한도, 연속2h/총4h) — 인접건물만 해당 */
   sh: DotStatus;
+  /** 교육·종교시설 창문 일조 — 용도 지정한 인접건물만. pass=사업 영향 없음, fail=영향 있음 */
+  fac: DotStatus;
 }
 
 export function emptyBuildingStatus(): BuildingStatus {
-  return { m2: "na", m3d: "na", m3s: "na", sh: "na" };
+  return { m2: "na", m3d: "na", m3s: "na", sh: "na", fac: "na" };
 }
 
 /**
@@ -143,6 +154,11 @@ export function renderBuildingList(
   if (adjs.length > 0) {
     root.appendChild(sectionHeading(`인접건물 (${adjs.length})`));
     const selectedAdj = adjs.find((b) => b.id === selectedId);
+    // 유치원·학교·교회로 지정한 동은 몇 동 안 되고 자주 고치므로 늘 목록에 둔다
+    for (const f of adjs) {
+      if (!f.use || f === selectedAdj) continue;
+      root.appendChild(renderAccordionItem(f, false, statusMap.get(f.id) ?? emptyBuildingStatus(), cb));
+    }
     if (selectedAdj) {
       root.appendChild(
         renderAccordionItem(
@@ -155,7 +171,7 @@ export function renderBuildingList(
     } else {
       const hint = document.createElement("p");
       hint.className = "hint";
-      hint.textContent = "3D 화면에서 인접건물을 클릭하면 상세 정보가 여기 표시됩니다.";
+      hint.textContent = "3D 화면에서 인접건물을 클릭하면 상세 정보가 여기 표시됩니다 (용도 지정은 상세 패널에서).";
       root.appendChild(hint);
     }
   }
@@ -215,7 +231,7 @@ const DOT_STATUS_LABEL: Record<DotStatus, string> = {
   na: "미검토",
 };
 
-function dotSpan(kind: "m2" | "m3d" | "m3s" | "sh", status: DotStatus, title: string): HTMLSpanElement {
+function dotSpan(kind: keyof BuildingStatus, status: DotStatus, title: string): HTMLSpanElement {
   const dot = document.createElement("span");
   dot.className = `status-dot dot-${kind} ${status}`;
   // 색만으로는 의미를 알 수 없고 title은 hover 전용이라 터치 기기에서 볼 수 없다 —
@@ -256,7 +272,7 @@ function renderAccordionItem(
 
   const floorBadge = document.createElement("span");
   floorBadge.className = "floor-badge";
-  floorBadge.textContent = `${b.floors}F`;
+  floorBadge.textContent = b.use ? `${b.floors}F · ${FACILITY_USE_LABEL[b.use]}` : `${b.floors}F`;
   header.appendChild(floorBadge);
 
   const dots = document.createElement("span");
@@ -267,6 +283,7 @@ function renderAccordionItem(
     dotSpan("m3s", status.m3s, "인동거리"),
     dotSpan("sh", status.sh, "일조권(수인한도)"),
   );
+  if (b.use) dots.append(dotSpan("fac", status.fac, "교육·종교시설 일조"));
   header.appendChild(dots);
 
   const deleteBtn = document.createElement("button");
@@ -328,7 +345,59 @@ function renderAccordionItem(
   return card;
 }
 
-function statusText(s: DotStatus): string {
+/** 인접건물 시설 용도(유치원·초등학교·교회)·교실 층 입력 — 교육·종교시설 창문 일조 검토용 */
+function facilityControls(b: Building, cb: UiCallbacks): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "facility-ctl";
+  const row = document.createElement("div");
+  row.className = "num-row";
+  const sel = document.createElement("select");
+  sel.className = "facility-use";
+  sel.innerHTML =
+    `<option value="">일반</option>` +
+    (Object.keys(FACILITY_USE_LABEL) as FacilityUse[])
+      .map((k) => `<option value="${k}">${FACILITY_USE_LABEL[k]}</option>`)
+      .join("");
+  sel.value = b.use ?? "";
+  row.appendChild(labelWrap("용도", sel));
+
+  const fromIn = numberInput(b.classFloors?.from ?? 1, 1, 100, 1);
+  const toIn = numberInput(b.classFloors?.to ?? b.floors, 1, 100, 1);
+  const floorsRow = document.createElement("div");
+  floorsRow.className = "num-row";
+  floorsRow.append(labelWrap("교실 층 부터", fromIn), labelWrap("까지", toIn));
+  const win = document.createElement("div");
+  win.className = "height-info";
+  const refresh = () => {
+    floorsRow.hidden = !b.use;
+    win.hidden = !b.use;
+    win.textContent = b.windowSegments.length > 0
+      ? `창(ADJ_WIN) ${b.windowSegments.length}개 × 교실 층마다 측정`
+      : "창(ADJ_WIN) 표시가 없어 검토할 수 없습니다 — 도면에 창 선을 그려 주세요";
+  };
+  sel.addEventListener("change", () => {
+    b.use = (sel.value || undefined) as FacilityUse | undefined;
+    if (!b.use) delete b.use;
+    refresh();
+    cb.onFacilityChange(b);
+  });
+  const onFloors = () => {
+    const from = clampNum(fromIn, 1, b.floors);
+    const to = clampNum(toIn, from, b.floors);
+    fromIn.value = String(from);
+    toIn.value = String(to);
+    b.classFloors = { from, to };
+    cb.onFacilityChange(b);
+  };
+  fromIn.addEventListener("change", onFloors);
+  toIn.addEventListener("change", onFloors);
+  refresh();
+  wrap.append(row, floorsRow, win);
+  return wrap;
+}
+
+function statusText(s: DotStatus, kind?: string): string {
+  if (kind === "fac") return s === "pass" ? "영향 없음" : s === "fail" ? "영향 있음" : "미검토";
   return s === "pass" ? "적합" : s === "fail" ? "위반" : "미검토";
 }
 
@@ -376,7 +445,10 @@ function renderBuildingDetail(
         ["m3d", "채광사선", status.m3d],
         ["m3s", "인동거리", status.m3s],
       ]
-    : [["sh", "일조권(수인한도)", status.sh]];
+    : [
+        ["sh", "일조권(수인한도)", status.sh],
+        ...(b.use ? ([["fac", `${FACILITY_USE_LABEL[b.use]} 창문 일조`, status.fac]] as [string, string, DotStatus][]) : []),
+      ];
   const checks = document.createElement("div");
   checks.className = "detail-checks";
   let html = `<div class="detail-sec-title">검토 결과</div>`;
@@ -384,7 +456,7 @@ function renderBuildingDetail(
     html +=
       `<div class="chk-row"><span class="status-dot dot-${kind} ${st}"></span>` +
       `<span class="chk-label">${label}</span>` +
-      `<span class="chk-text chk-${kind} ${st}">${statusText(st)}</span></div>`;
+      `<span class="chk-text chk-${kind} ${st}">${statusText(st, kind)}</span></div>`;
   }
   checks.innerHTML = html;
   card.appendChild(checks);
@@ -477,6 +549,8 @@ function fillAccordionBody(
     heightInfo.className = "height-info";
     heightInfo.textContent = heightText(b);
     card.appendChild(heightInfo);
+
+    if (!isPlan) card.appendChild(facilityControls(b, cb));
 
     // M6/M6.8: 세대수 자동산출 — 평형별 "층당 세대수" 입력 → 총 세대수 = 층당 × 주거층수(×분절)
     if (isPlan && b.unitsPerFloor > 0) {
@@ -620,6 +694,7 @@ export function refreshStatusDots(statusMap: Map<string, BuildingStatus>): void 
       ["m3d", status.m3d],
       ["m3s", status.m3s],
       ["sh", status.sh],
+      ["fac", status.fac],
     ] as const;
     for (const [kind, st] of kinds) {
       // 좌측 아코디언 헤더 도트 + 우측 패널 검토결과 도트를 모두 갱신
@@ -630,7 +705,7 @@ export function refreshStatusDots(statusMap: Map<string, BuildingStatus>): void 
         .querySelectorAll(`.building-card[data-id="${id}"] .chk-${kind}`)
         .forEach((el) => {
           setDotStatus(el, st);
-          el.textContent = statusText(st);
+          el.textContent = statusText(st, kind);
         });
     }
   }
@@ -1360,7 +1435,7 @@ function clampNum(input: HTMLInputElement, min: number, max: number): number {
   return v;
 }
 
-function labelWrap(text: string, input: HTMLInputElement): HTMLLabelElement {
+function labelWrap(text: string, input: HTMLInputElement | HTMLSelectElement): HTMLLabelElement {
   const label = document.createElement("label");
   label.append(text, input);
   return label;
@@ -1539,4 +1614,57 @@ export function renderCompareTable(schemes: SchemeRecord[]): void {
   note.textContent =
     "앰버 = 해당 지표 최댓값. 법규 검토는 저장 시점 결과이며, 채광·인동은 토글을 켜고 저장해야 값이 남습니다.";
   host.appendChild(note);
+}
+
+// ---------- 교육·종교시설 창문 일조 ----------
+
+const FAC_ORDER: FacilityPointStatus[] = ["ok", "project", "worse", "existing"];
+
+/** 좌측 패널 요약 — 동별 판정 + 층별 측정점 판정 개수 표 */
+export function renderFacilitySummary(r: FacilityResult | null, note?: string): void {
+  const host = document.getElementById("facility-summary");
+  if (!host) return;
+  if (!r) {
+    host.innerHTML = note ? `<p class="hint">${note}</p>` : "";
+    return;
+  }
+  const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  let html = "";
+  if (r.summaries.length === 0) {
+    html += `<p class="hint">검토할 측정점이 없습니다.</p>`;
+  }
+  const legend = FAC_ORDER.map(
+    (k) => `<span class="fac-legend"><i style="background:${facilityStatusColor(k)}"></i>${FACILITY_STATUS_LABEL[k]}</span>`,
+  ).join(" ");
+  if (r.summaries.length > 0) html += `<div class="fac-legends">${legend}</div>`;
+  for (const s of r.summaries) {
+    const useName = { kindergarten: "유치원", school: "초등학교", church: "교회" }[s.use];
+    html +=
+      `<div class="fac-bldg"><div class="fac-head"><b>${esc(s.name)}</b> · ${useName} ` +
+      `<span class="fac-verdict ${s.affected ? "fail" : "pass"}">${s.affected ? "사업 영향 있음" : "사업 영향 없음"}</span></div>` +
+      `<div class="hint">${facilityRuleLabel(s.use, r.settings)} · 창 ${s.windows}개 × ${s.floorFrom}~${s.floorTo}층 · ` +
+      `측정 높이 바닥+${r.settings.windowHeightM}m</div>` +
+      `<table class="fac-table"><thead><tr><th>층</th>${FAC_ORDER.map((k) => `<th title="${FACILITY_STATUS_LABEL[k]}"><i style="background:${facilityStatusColor(k)}"></i></th>`).join("")}</tr></thead><tbody>`;
+    for (const f of [...s.byFloor].reverse()) {
+      html += `<tr><td>${f.floor}F</td>${FAC_ORDER.map((k) => `<td>${f.counts[k] || ""}</td>`).join("")}</tr>`;
+    }
+    html += `</tbody></table>`;
+    const pts = r.points.filter((p) => p.buildingId === s.buildingId);
+    html +=
+      `<details class="fac-detail"><summary>창별 일조시간 (사업 전 → 후)</summary><table class="fac-table"><thead>` +
+      `<tr><th>층</th><th>창</th><th>연속(h)</th><th>총(h)</th><th>판정</th></tr></thead><tbody>`;
+    for (const p of [...pts].sort((a, b) => b.floor - a.floor || a.window - b.window)) {
+      const fmt = (a: number, b: number) => (Math.abs(a - b) < 1e-6 ? a.toFixed(1) : `${a.toFixed(1)}→${b.toFixed(1)}`);
+      html +=
+        `<tr><td>${p.floor}F</td><td>${p.window}</td><td>${fmt(p.before.continuous, p.after.continuous)}</td>` +
+        `<td>${fmt(p.before.total, p.after.total)}</td>` +
+        `<td style="color:${facilityStatusColor(p.status)}">${FACILITY_STATUS_LABEL[p.status]}</td></tr>`;
+    }
+    html += `</tbody></table></details></div>`;
+  }
+  if (r.noWindows.length > 0) {
+    html += `<p class="hint warn">창(ADJ_WIN) 표시가 없어 검토하지 못한 동: ${r.noWindows.map(esc).join(", ")}</p>`;
+  }
+  if (note) html += `<p class="hint">${note}</p>`;
+  host.innerHTML = html;
 }

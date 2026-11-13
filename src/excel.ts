@@ -1,3 +1,4 @@
+import { FACILITY_STATUS_LABEL, type FacilityResult } from "./facility";
 import XLSX from "xlsx-js-style";
 import type { NorthSetbackResult } from "./northsetback";
 import {
@@ -432,6 +433,7 @@ export function buildWorkbook(
   wind: WindResult | null = null,
   sunHoursMap: SunHoursMapResult | null = null,
   lbm: LbmResult | null = null,
+  facility: FacilityResult | null = null,
 ): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
   const overview = buildOverviewRows(project);
@@ -482,7 +484,54 @@ export function buildWorkbook(
     sheetFromRows(buildSunHoursMapRows(sunHoursMap), [0], [24, 34]),
     "일조시간",
   );
+  // 시설 일조는 용도 지정한 동이 있을 때만 의미가 있어 실행했을 때만 시트를 붙인다
+  if (facility) {
+    XLSX.utils.book_append_sheet(
+      wb,
+      sheetFromRows(buildFacilityRows(facility), [0], [14, 10, 6, 6, 12, 12, 12, 12, 20]),
+      "교육·종교시설 일조",
+    );
+  }
   return wb;
+}
+
+/** 교육·종교시설 창문 일조 — 창 × 층 측정점별 사업 전·후 일조시간과 판정 */
+export function buildFacilityRows(r: FacilityResult): Cell[][] {
+  const rows: Cell[][] = [[
+    "건물명", "용도", "층", "창", "사업 전 연속(h)", "사업 전 총(h)", "사업 후 연속(h)", "사업 후 총(h)", "판정",
+  ]];
+  const useLabel = { kindergarten: "유치원", school: "초등학교", church: "교회" } as const;
+  for (const s of r.summaries) {
+    const pts = r.points
+      .filter((p) => p.buildingId === s.buildingId)
+      .sort((a, b) => a.floor - b.floor || a.window - b.window);
+    for (const p of pts) {
+      rows.push([
+        s.name, useLabel[s.use], p.floor, p.window,
+        round(p.before.continuous, 2), round(p.before.total, 2),
+        round(p.after.continuous, 2), round(p.after.total, 2),
+        FACILITY_STATUS_LABEL[p.status],
+      ]);
+    }
+  }
+  rows.push([]);
+  rows.push(["동별 판정"]);
+  for (const s of r.summaries) {
+    rows.push([
+      s.name, useLabel[s.use], `${s.floorFrom}~${s.floorTo}층`, `창 ${s.windows}`,
+      s.affected ? "사업 영향 있음" : "사업 영향 없음",
+      `확보 ${s.counts.ok}`, `사업으로 미달 ${s.counts.project}`,
+      `추가 감소 ${s.counts.worse}`, `기존 미달 ${s.counts.existing}`,
+    ]);
+  }
+  if (r.noWindows.length) rows.push(["창 표시 없어 미검토", r.noWindows.join(", ")]);
+  rows.push([]);
+  rows.push(["기준일", r.date]);
+  rows.push(["시간 간격(분)", r.timeStep]);
+  rows.push(["측정 높이(층 바닥+m)", r.settings.windowHeightM]);
+  rows.push(["유치원·초등 연속 구간", r.settings.schoolContinuousWindow === "9-13" ? "09~13시" : "09~15시"]);
+  rows.push(["판정 기준", "총 4h(08~16시) 또는 연속 2h — 교회는 수인한도(연속 09~15시)"]);
+  return rows;
 }
 
 /** 내보내기 파일명 — 날짜별로 구분 */
@@ -506,6 +555,7 @@ export function buildXlsxBlob(
   wind: WindResult | null = null,
   sunHoursMap: SunHoursMapResult | null = null,
   lbm: LbmResult | null = null,
+  facility: FacilityResult | null = null,
 ): Blob {
   const wb = buildWorkbook(
     project,
@@ -516,6 +566,7 @@ export function buildXlsxBlob(
     wind,
     sunHoursMap,
     lbm,
+    facility,
   );
   const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
   return new Blob([bytes], { type: XLSX_MIME });

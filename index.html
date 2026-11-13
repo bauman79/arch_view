@@ -932,6 +932,18 @@
       }
 
       /* 검토 결과 (우측 패널) */
+      .fac-legends { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0; font-size: 11px; }
+      .fac-legend i, .fac-table th i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+      .fac-bldg { border-top: 1px solid var(--border, #3333); padding-top: 6px; margin-top: 6px; }
+      .fac-head { font-size: 12px; margin-bottom: 2px; }
+      .fac-verdict { font-weight: 600; margin-left: 4px; }
+      .fac-verdict.pass { color: #4c8bf5; }
+      .fac-verdict.fail { color: #e5484d; }
+      .fac-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px; }
+      .fac-table th, .fac-table td { padding: 2px 4px; text-align: center; border-bottom: 1px solid var(--border, #3333); }
+      .fac-detail summary { font-size: 11px; cursor: pointer; margin-top: 4px; }
+      .hint.warn { color: #f5a524; }
+      .facility-ctl select { width: 100%; }
       .detail-checks {
         margin-top: 12px;
         padding-top: 10px;
@@ -1888,6 +1900,35 @@
               </div>
               <p class="hint">히트맵: 파랑=적합, 빨강=위반</p>
               <div id="sunhours-summary"></div>
+            </details>
+
+            <details>
+              <summary>교육·종교시설 일조 (창문 기준)</summary>
+              <p class="hint">
+                유치원·초등학교·교회로 지정한 인접건물의 <b>창(<code>ADJ_WIN</code>)마다, 교실 층마다</b>
+                측정점을 두고 사업 전(계획주동 없음)·후 일조시간을 비교한다. 용도·교실 층은 건물을 선택해
+                상세 패널에서 고르거나, 도면에 <code>BLDG_USE</code> 레이어 문자(유치원·초등학교·교회)로 적는다.
+              </p>
+              <div class="row">
+                <label for="facility-window">유치원·초등 연속 구간</label>
+                <select id="facility-window">
+                  <option value="9-15" selected>09~15시 (일반)</option>
+                  <option value="9-13">09~13시 (강화 운영)</option>
+                </select>
+              </div>
+              <div class="row">
+                <label for="facility-height">측정 높이(바닥+m)</label>
+                <input type="number" id="facility-height" value="1.2" step="0.1" min="0" max="3" />
+              </div>
+              <p class="hint">
+                기준: 동지(기준일) 08~16시 총 4시간 또는 연속 2시간. 교회는 판례 수인한도(연속 09~15시).
+                시간 간격은 일조권 검토 설정을 따른다.
+              </p>
+              <div class="row">
+                <button id="run-facility" class="btn primary">시설 일조 검토 실행</button>
+                <button id="clear-facility" class="btn mini">지우기</button>
+              </div>
+              <div id="facility-summary"></div>
             </details>
 
             <details>

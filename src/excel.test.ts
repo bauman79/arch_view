@@ -335,3 +335,19 @@ describe("엑셀 내보내기 round-trip", () => {
     expect(siteRow?.[1]).toBe("미입력");
   });
 });
+
+describe("교육·종교시설 일조 시트", () => {
+  it("실행 결과가 있을 때만 8번째 시트로 붙는다", async () => {
+    const { buildWorkbook } = await import("./excel");
+    const { defaultProject } = await import("./types");
+    const fac = {
+      date: "2026-12-21", timeStep: 10,
+      settings: { windowHeightM: 1.2, schoolContinuousWindow: "9-15" as const },
+      points: [], summaries: [], noWindows: ["유치원"],
+    };
+    const wb = buildWorkbook(defaultProject(), null, null, null, null, null, null, null, fac);
+    expect(wb.SheetNames).toHaveLength(8);
+    expect(wb.SheetNames[7]).toBe("교육·종교시설 일조");
+  });
+});
+
