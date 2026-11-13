@@ -66,3 +66,73 @@ export async function shareOrDownloadText(
 ): Promise<ShareOutcome> {
   return shareOrDownload(new File([text], filename, { type: mime }), title);
 }
+
+// ---------- 바탕화면 저장·열기 (File System Access API) ----------
+// Chrome·Edge(데스크톱)는 저장/열기 창을 바탕화면에서 시작하게 할 수 있다. 브라우저는 보안상
+// 사용자 확인 없이 파일을 쓸 수 없으므로 "바탕화면이 열린 창"이 가능한 최선이다.
+// Safari·iPad 등 미지원 환경은 호출부가 기존 방식(다운로드·공유, 파일 입력)으로 처리한다.
+
+type PickerAccept = Record<string, string[]>;
+
+interface PickerWindow {
+  showSaveFilePicker?: (opts: unknown) => Promise<{
+    createWritable: () => Promise<{ write: (d: Blob) => Promise<void>; close: () => Promise<void> }>;
+    name: string;
+  }>;
+  showOpenFilePicker?: (opts: unknown) => Promise<{ getFile: () => Promise<File> }[]>;
+}
+
+export function canPickDesktop(): boolean {
+  return typeof window !== "undefined" && typeof (window as PickerWindow).showSaveFilePicker === "function";
+}
+
+/**
+ * 바탕화면에서 시작하는 저장 창으로 저장.
+ * @returns 저장한 파일 이름 · "cancelled"(창을 닫음) · "unsupported"(이 브라우저는 미지원)
+ */
+export async function saveToDesktop(
+  blob: Blob,
+  suggestedName: string,
+  description: string,
+  accept: PickerAccept,
+): Promise<string | "cancelled" | "unsupported"> {
+  const w = window as PickerWindow;
+  if (!w.showSaveFilePicker) return "unsupported";
+  try {
+    const handle = await w.showSaveFilePicker({
+      suggestedName,
+      startIn: "desktop",
+      types: [{ description, accept }],
+    });
+    const out = await handle.createWritable();
+    await out.write(blob);
+    await out.close();
+    return handle.name;
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") return "cancelled";
+    throw err;
+  }
+}
+
+/**
+ * 바탕화면에서 시작하는 열기 창으로 파일 하나를 고른다.
+ * @returns 고른 파일 · null(창을 닫음) · "unsupported"
+ */
+export async function openFromDesktop(
+  description: string,
+  accept: PickerAccept,
+): Promise<File | null | "unsupported"> {
+  const w = window as PickerWindow;
+  if (!w.showOpenFilePicker) return "unsupported";
+  try {
+    const [handle] = await w.showOpenFilePicker({
+      startIn: "desktop",
+      multiple: false,
+      types: [{ description, accept }],
+    });
+    return await handle.getFile();
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") return null;
+    throw err;
+  }
+}

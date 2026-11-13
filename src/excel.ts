@@ -10,7 +10,7 @@ import {
 } from "./massing";
 import type { PvResult } from "./pv";
 import type { PvEnergyResult } from "./pvenergy";
-import type { SunHoursResult } from "./sunhours";
+import { judgeBuilding, type SunHoursResult } from "./sunhours";
 import type { SunHoursMapResult } from "./sunhoursmap";
 import { windDirLabel, type WindResult } from "./wind";
 import type { LbmResult } from "./lbm";
@@ -177,15 +177,17 @@ const SUN_HOURS_RULE_LABEL: Record<SunHoursRule, string> = {
 
 /** 대법원 수인한도 판례 — 인접건물 벽면·지붕별 확보 셀 수/비율 (정북사선과 별개 검토) */
 export function buildSunHoursRows(result: SunHoursResult | null): Cell[][] {
-  const header: Cell[] = ["건물명", "면", "셀 수", "확보 셀", "확보율(%)"];
+  const header: Cell[] = ["건물명", "면", "셀 수", "확보 셀", "확보율(%)", "동 판정"];
   const rows: Cell[][] = [header];
   if (!result) {
     rows.push(["(일조권 검토 미실행)"]);
     return rows;
   }
+  const passRatio = result.passRatio ?? 1;
   for (const s of result.summaries) {
+    const verdict = judgeBuilding(s, passRatio);
     for (const [label, f] of [
-      ["벽면", s.wall],
+      [result.roadFacingOnly ? "도로 접면 벽" : "벽면", s.wall],
       ["지붕", s.roof],
     ] as const) {
       if (f.totalCells === 0) continue;
@@ -195,11 +197,15 @@ export function buildSunHoursRows(result: SunHoursResult | null): Cell[][] {
         f.totalCells,
         f.passCells,
         round((f.passCells / f.totalCells) * 100, 1),
+        verdict === "pass" ? "확보" : verdict === "fail" ? "미달" : "",
       ]);
     }
   }
   rows.push([]);
   rows.push(["판정 기준", SUN_HOURS_RULE_LABEL[result.rule]]);
+  rows.push(["판정 범위", result.roadFacingOnly ? `도로 접면 벽만 (${result.roadSource})` : "전체 벽·지붕"]);
+  rows.push(["동 적합 기준 확보율(%)", round(passRatio * 100, 0)]);
+  if (result.excludedBuildings) rows.push(["도로 접면 없어 판정 제외(동)", result.excludedBuildings]);
   rows.push(["시간 간격(분)", result.timeStep]);
   return rows;
 }

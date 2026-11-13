@@ -170,6 +170,14 @@ export interface SunHoursSettings {
   /** 태양 위치 샘플 간격 (분) */
   timeStep: number;
   rule: SunHoursRule;
+  /**
+   * 도로에 접한 벽면만 판정 — 인접건물의 주 개구부는 대개 도로 쪽이고, 북향·인동 측벽까지
+   * 넣으면 동지에 원래 해가 안 드는 벽 때문에 사실상 모든 동이 "미달"이 된다.
+   * 없으면(옛 .view) true로 본다.
+   */
+  roadFacingOnly?: boolean;
+  /** 동 단위 적합 기준 — 판정 대상 셀 중 기준을 만족한 비율이 이 값 이상이면 적합 (0~1). 기본 0.5 */
+  passRatio?: number;
 }
 
 export interface AnalysisSettings {
@@ -228,6 +236,8 @@ export function defaultProject(): Project {
       sunHours: {
         timeStep: 10,
         rule: "either",
+        roadFacingOnly: true,
+        passRatio: 0.5,
       },
     },
   };

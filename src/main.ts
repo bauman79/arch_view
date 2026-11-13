@@ -71,7 +71,12 @@ import {
 } from "./massing";
 import { createSpacingOverlay, runSpacingCheck, type SpacingResult } from "./spacing";
 import { formatMinutes, localDate, sunPosition } from "./sun";
-import { createSunHoursOverlay, runSunHoursCheck, type SunHoursResult } from "./sunhours";
+import {
+  createSunHoursOverlay,
+  judgeBuilding,
+  runSunHoursCheck,
+  type SunHoursResult,
+} from "./sunhours";
 import {
   createSunHoursMapOverlay,
   disposeSunHoursMapOverlay,
@@ -140,7 +145,13 @@ import {
 } from "./ui";
 import { initShell, notifyRightPanel } from "./shell";
 import { isDrag } from "./pointer";
-import { shareOrDownload, shareOrDownloadText } from "./share";
+import {
+  canPickDesktop,
+  openFromDesktop,
+  saveToDesktop,
+  shareOrDownload,
+  shareOrDownloadText,
+} from "./share";
 import {
   deleteScheme,
   formatSavedAt,
@@ -379,13 +390,7 @@ function computeStatusMap(): Map<string, BuildingStatus> {
     for (const s of lastSunHours.summaries) {
       const cur = map.get(s.buildingId);
       if (!cur) continue;
-      const total = s.wall.totalCells + s.roof.totalCells;
-      cur.sh =
-        total === 0
-          ? "na"
-          : s.wall.passCells === s.wall.totalCells && s.roof.passCells === s.roof.totalCells
-            ? "pass"
-            : "fail";
+      cur.sh = judgeBuilding(s, lastSunHours.passRatio);
     }
   }
   if (lastDaylight) {
@@ -1080,6 +1085,13 @@ const daylightRoot = new THREE.Group();
 const spacingRoot = new THREE.Group();
 viewer.scene.add(northSetbackRoot, daylightRoot, spacingRoot);
 
+// 정북사선 검토선 표시 토글 — 판정(상태바·목록 도트·엑셀)은 계속 계산하고 3D 선만 숨긴다
+const northLinesInput = document.getElementById("show-north-lines") as HTMLInputElement | null;
+northLinesInput?.addEventListener("change", () => {
+  northSetbackRoot.visible = northLinesInput.checked;
+  setStatus(northLinesInput.checked ? "정북사선 검토선 표시" : "정북사선 검토선 숨김 — 판정은 계속 갱신됩니다");
+});
+
 function syncSetbackRules(): void {
   const r = project.analysis.setbackRules;
   r.northSetbackLowM = Math.max(0, parseFloat(northLowInput.value) || 1.5);
@@ -1214,6 +1226,18 @@ viewer.scene.add(sunHoursRoot);
 const sunHoursRuleSelect = document.getElementById("sunhours-rule") as HTMLSelectElement;
 const sunHoursStepInput = document.getElementById("sunhours-step") as HTMLInputElement;
 const runSunHoursBtn = document.getElementById("run-sunhours") as HTMLButtonElement;
+const sunHoursRoadOnlyInput = document.getElementById("sunhours-road-only") as HTMLInputElement;
+const sunHoursPassRatioInput = document.getElementById("sunhours-pass-ratio") as HTMLInputElement;
+
+/** 일조권 설정 입력값 → project (실행·저장 공용) */
+function syncSunHoursSettings(): void {
+  const sh = project.analysis.sunHours;
+  sh.rule = sunHoursRuleSelect.value as SunHoursRule;
+  sh.timeStep = Math.max(5, parseFloat(sunHoursStepInput.value) || 10);
+  sh.roadFacingOnly = sunHoursRoadOnlyInput.checked;
+  const pct = parseFloat(sunHoursPassRatioInput.value);
+  sh.passRatio = Math.min(100, Math.max(1, Number.isFinite(pct) ? pct : 50)) / 100;
+}
 
 runSunHoursBtn.addEventListener("click", async () => {
   if (sunHoursRunning) return;
@@ -1223,8 +1247,7 @@ runSunHoursBtn.addEventListener("click", async () => {
     return;
   }
   syncAnalysisSettings();
-  project.analysis.sunHours.rule = sunHoursRuleSelect.value as SunHoursRule;
-  project.analysis.sunHours.timeStep = Math.max(5, parseFloat(sunHoursStepInput.value) || 10);
+  syncSunHoursSettings();
   clearGroup(sunHoursRoot);
   lastSunHours = null;
   sunHoursRunning = true;
@@ -1245,10 +1268,16 @@ runSunHoursBtn.addEventListener("click", async () => {
         : result.rule === "total"
           ? "총 4h(8~16시)"
           : "연속2h 또는 총4h";
+    const roadNote = project.analysis.sunHours.roadFacingOnly && !result.roadFacingOnly
+      ? " · 도로(ROAD_AREA·ROAD_CL)가 없어 전체 벽·지붕으로 판정"
+      : result.roadFacingOnly
+        ? ` · 도로 접면 기준(${result.roadSource})`
+        : "";
     renderSunHoursSummary(
       result.summaries,
       ruleLabel,
-      `격자 ${result.cells.length}셀 × ${result.samples.length}시각 · ${(ms / 1000).toFixed(1)}초`,
+      `격자 ${result.cells.length}셀 × ${result.samples.length}시각 · ${(ms / 1000).toFixed(1)}초${roadNote}`,
+      { passRatio: result.passRatio, roadFacingOnly: result.roadFacingOnly, excluded: result.excludedBuildings },
     );
     setStatus(
       `일조권 검토 완료 — 적합 ${passTotal} / ${result.cells.length}셀 (파랑=적합, 빨강=위반)`,
@@ -1707,11 +1736,7 @@ document.getElementById("export-dxf")!.addEventListener("click", async () => {
 function syncAllSettings(): void {
   syncAnalysisSettings();
   syncSetbackRules();
-  project.analysis.sunHours.rule = sunHoursRuleSelect.value as SunHoursRule;
-  project.analysis.sunHours.timeStep = Math.max(
-    5,
-    parseFloat(sunHoursStepInput.value) || 10,
-  );
+  syncSunHoursSettings();
   project.site.siteAreaM2 = Math.max(0, parseFloat(siteAreaInput.value) || 0);
 }
 
@@ -1725,6 +1750,24 @@ async function saveProjectFile(): Promise<boolean> {
   const json = serializeView(project, sceneOrigin, { dxfLoadSeq, sceneSeq });
   const filename = `arch_view_${new Date().toISOString().slice(0, 10)}.view`;
   try {
+    // 데스크톱 Chrome·Edge: 바탕화면이 열린 저장 창 — 저장 위치를 사용자가 확인한다
+    const picked = await saveToDesktop(
+      new Blob([json], { type: "application/json" }),
+      filename,
+      "arch_view 프로젝트",
+      { "application/json": [".view"] },
+    );
+    if (picked === "cancelled") {
+      setStatus("저장 취소됨");
+      return false;
+    }
+    if (picked !== "unsupported") {
+      setStatus(
+        `프로젝트 저장 — ${picked} (장면 ${project.buildings.length}동 · ` +
+          `라이브러리 ${project.buildingLibrary.length}동 · 분석 설정 포함)`,
+      );
+      return true;
+    }
     const outcome = await shareOrDownloadText(
       json,
       filename,
@@ -1762,6 +1805,8 @@ function applyProjectToInputs(): void {
   fillSetbackInputs(project.analysis.setbackRules);
   sunHoursRuleSelect.value = project.analysis.sunHours.rule;
   sunHoursStepInput.value = String(project.analysis.sunHours.timeStep);
+  sunHoursRoadOnlyInput.checked = project.analysis.sunHours.roadFacingOnly ?? true;
+  sunHoursPassRatioInput.value = String(Math.round((project.analysis.sunHours.passRatio ?? 0.5) * 100));
 }
 
 /**
@@ -2375,4 +2420,40 @@ if (import.meta.env.DEV) {
     runSunHoursMap,
     getLastSunHoursMap: () => lastSunHoursMap,
   };
+}
+
+// ---------- 불러오기: 바탕화면에서 시작하는 열기 창 ----------
+// 파일 메뉴의 "DXF 불러오기·DXF 추가·프로젝트 열기"는 숨긴 <input type=file>과 연결된 라벨이다.
+// 지원 브라우저에서는 라벨 클릭을 가로채 바탕화면이 열린 창으로 고르고, 고른 파일을 같은 input에
+// 넣어 change를 발생시킨다 — 기존 처리 경로를 그대로 타므로 불러오기 동작이 갈라지지 않는다.
+if (canPickDesktop()) {
+  const targets: { inputId: string; description: string; accept: Record<string, string[]> }[] = [
+    { inputId: "dxf-file", description: "DXF 도면", accept: { "application/dxf": [".dxf"] } },
+    { inputId: "dxf-file-add", description: "DXF 도면", accept: { "application/dxf": [".dxf"] } },
+    { inputId: "view-file", description: "arch_view 프로젝트", accept: { "application/json": [".view"] } },
+  ];
+  for (const t of targets) {
+    const input = document.getElementById(t.inputId) as HTMLInputElement | null;
+    if (!input) continue;
+    for (const label of document.querySelectorAll<HTMLLabelElement>(`label[for="${t.inputId}"]`)) {
+      label.addEventListener("click", async (e) => {
+        e.preventDefault();
+        try {
+          const file = await openFromDesktop(t.description, t.accept);
+          if (file === "unsupported") {
+            input.click();
+            return;
+          }
+          if (!file) return; // 창을 닫음
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        } catch (err) {
+          setStatus(`파일 열기 실패: ${(err as Error).message}`);
+          console.error(err);
+        }
+      });
+    }
+  }
 }

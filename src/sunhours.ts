@@ -7,9 +7,11 @@ import {
   RAY_FAR,
   type GridCell,
 } from "./insolation";
+import { worldFootprint } from "./buildings";
+import { pointInPolygon, signedArea } from "./geom2d";
 import { yieldToEventLoop } from "./pv";
 import { sunSamples, type SunSample } from "./sun";
-import type { Building, Project, SunHoursRule } from "./types";
+import type { Building, OverlayLine, Point2, Project, SunHoursRule } from "./types";
 
 /**
  * 일조권(수인한도) 검토 — 대법원 판례 기준 09~15시 연속 2시간 이상 또는 08~16시 총 4시간
@@ -48,13 +50,153 @@ export interface SunHoursBuildingSummary {
   roof: SunHoursFaceSummary;
 }
 
+/** 도로 접면을 무엇으로 찾았는지 — null이면 도로 정보가 없어 전체 벽·지붕으로 판정 */
+export type RoadFacingSource = "ROAD_AREA" | "ROAD_CL" | null;
+
 export interface SunHoursResult {
   rule: SunHoursRule;
   timeStep: number;
+  /** 동 적합 기준 확보율 (0~1) */
+  passRatio: number;
+  /** 실제로 도로 접면만 판정했는지 (설정이 켜져 있어도 도로 정보가 없으면 false) */
+  roadFacingOnly: boolean;
+  roadSource: RoadFacingSource;
+  /** 도로 접면이 없어 판정에서 빠진 인접건물 수 */
+  excludedBuildings: number;
   samples: SunSample[];
   cells: GridCell[];
   results: SunHoursCellResult[];
   summaries: SunHoursBuildingSummary[];
+}
+
+/** 동 단위 판정 — 판정 대상 셀이 없으면 "na"(판정 제외) */
+export function judgeBuilding(
+  s: SunHoursBuildingSummary,
+  passRatio: number,
+): "pass" | "fail" | "na" {
+  const total = s.wall.totalCells + s.roof.totalCells;
+  if (total === 0) return "na";
+  const ratio = (s.wall.passCells + s.roof.passCells) / total;
+  return ratio >= passRatio - EPS ? "pass" : "fail";
+}
+
+// ---------- 도로 접면 판별 ----------
+
+/** 도로 영역(ROAD_AREA)까지 벽에서 바깥으로 살펴보는 거리 (m) — 앞마당·담장 폭 정도 */
+const ROAD_AREA_REACH_M = 10;
+/** 도로중심선(ROAD_CL)만 있을 때 살펴보는 거리 (m) — 앞마당 + 도로 폭의 절반 */
+const ROAD_CL_REACH_M = 25;
+const MARCH_STEP_M = 0.5;
+const INDEX_CELL_M = 20;
+
+interface FootprintRef {
+  pts: Point2[];
+  minX: number; minY: number; maxX: number; maxY: number;
+}
+
+function bboxOf(pts: Point2[]): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/** 점이 든 폴리곤을 빠르게 찾는 격자 색인 — 630동 × 벽 × 샘플 × 걸음마다 전수 검사는 느리다 */
+class PolygonIndex {
+  private cells = new Map<string, FootprintRef[]>();
+  constructor(polys: Point2[][]) {
+    for (const pts of polys) {
+      const r: FootprintRef = { pts, ...bboxOf(pts) };
+      for (let cx = Math.floor(r.minX / INDEX_CELL_M); cx <= Math.floor(r.maxX / INDEX_CELL_M); cx++) {
+        for (let cy = Math.floor(r.minY / INDEX_CELL_M); cy <= Math.floor(r.maxY / INDEX_CELL_M); cy++) {
+          const k = `${cx},${cy}`;
+          const list = this.cells.get(k);
+          if (list) list.push(r); else this.cells.set(k, [r]);
+        }
+      }
+    }
+  }
+  contains(x: number, y: number): boolean {
+    const list = this.cells.get(`${Math.floor(x / INDEX_CELL_M)},${Math.floor(y / INDEX_CELL_M)}`);
+    if (!list) return false;
+    for (const r of list) {
+      if (x < r.minX || x > r.maxX || y < r.minY || y > r.maxY) continue;
+      if (pointInPolygon(x, y, r.pts)) return true;
+    }
+    return false;
+  }
+}
+
+function segmentsCross(a: Point2, b: Point2, c: Point2, d: Point2): boolean {
+  const o = (p: Point2, q: Point2, r: Point2) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const d1 = o(a, b, c), d2 = o(a, b, d), d3 = o(c, d, a), d4 = o(c, d, b);
+  return d1 * d2 <= 0 && d3 * d4 <= 0;
+}
+
+/**
+ * 인접건물마다 도로에 접한 벽(worldFootprint 변 번호)을 찾는다.
+ * 벽의 1/4·1/2·3/4 지점에서 바깥 법선 방향으로 조금씩 나아가며, 다른 건물(자기 자신의 오목부
+ * 포함)에 막히기 전에 도로에 닿으면 그 지점은 도로 쪽이다. 지점 과반이 닿으면 도로 접면.
+ * - ROAD_AREA(닫힌 도로 영역)가 있으면 그 안에 들어서는지로 판정 (10m 이내)
+ * - 없으면 ROAD_CL(도로중심선)을 가로지르는지로 판정 (25m 이내)
+ */
+export function findRoadFacingWalls(
+  buildings: Building[],
+  overlays: OverlayLine[],
+): { walls: Map<string, Set<number>>; source: RoadFacingSource } {
+  const walls = new Map<string, Set<number>>();
+  const roadAreas = overlays
+    .filter((o) => o.layer === "ROAD_AREA" && o.closed && o.points.length >= 3)
+    .map((o) => o.points);
+  const roadLines: [Point2, Point2][] = [];
+  for (const o of overlays) {
+    if (o.layer !== "ROAD_CL") continue;
+    const n = o.points.length;
+    for (let i = 0; i < (o.closed ? n : n - 1); i++) roadLines.push([o.points[i], o.points[(i + 1) % n]]);
+  }
+  const source: RoadFacingSource = roadAreas.length > 0 ? "ROAD_AREA" : roadLines.length > 0 ? "ROAD_CL" : null;
+  if (!source) return { walls, source };
+
+  const footprints = buildings.map((b) => worldFootprint(b)).filter((fp) => fp.length >= 3);
+  const blockers = new PolygonIndex(footprints);
+  const roads = new PolygonIndex(roadAreas);
+  const reach = source === "ROAD_AREA" ? ROAD_AREA_REACH_M : ROAD_CL_REACH_M;
+
+  for (const b of buildings) {
+    if (b.type !== "인접건물") continue;
+    const fp = worldFootprint(b);
+    if (fp.length < 3) continue;
+    const ws = signedArea(fp) >= 0 ? 1 : -1;
+    const set = new Set<number>();
+    for (let i = 0; i < fp.length; i++) {
+      const p1 = fp[i], p2 = fp[(i + 1) % fp.length];
+      const ex = p2.x - p1.x, ey = p2.y - p1.y;
+      const len = Math.hypot(ex, ey);
+      if (len < 1) continue;
+      const nx = (ws * ey) / len, ny = (-ws * ex) / len; // 바깥 법선 (buildAnalysisGrid와 같은 규약)
+      const ts = len < 3 ? [0.5] : [0.25, 0.5, 0.75];
+      let hits = 0;
+      for (const t of ts) {
+        const o = { x: p1.x + ex * t, y: p1.y + ey * t };
+        let prev = o;
+        for (let d = 0.3; d <= reach; d += MARCH_STEP_M) {
+          const q = { x: o.x + nx * d, y: o.y + ny * d };
+          if (blockers.contains(q.x, q.y)) break; // 옆 건물·자기 오목부에 막힘
+          if (source === "ROAD_AREA") {
+            if (roads.contains(q.x, q.y)) { hits++; break; }
+          } else if (roadLines.some(([a, c]) => segmentsCross(prev, q, a, c))) {
+            hits++; break;
+          }
+          prev = q;
+        }
+      }
+      if (hits * 2 >= ts.length + (ts.length > 1 ? 1 : 0)) set.add(i); // 3지점 중 2곳 이상
+    }
+    if (set.size > 0) walls.set(b.id, set);
+  }
+  return { walls, source };
 }
 
 export function passesRule(rule: SunHoursRule, continuousH: number, totalH: number): boolean {
@@ -86,13 +228,24 @@ export async function runSunHoursCheck(
     timeStep,
   );
 
+  const wantRoadOnly = analysis.sunHours.roadFacingOnly ?? true;
+  const passRatio = analysis.sunHours.passRatio ?? 0.5;
+  const road = wantRoadOnly
+    ? findRoadFacingWalls(buildings, project.siteOverlays)
+    : { walls: new Map<string, Set<number>>(), source: null as RoadFacingSource };
+  // 도로 정보가 없으면 설정이 켜져 있어도 전체 벽·지붕으로 판정한다(결과에 표시)
+  const roadOnly = wantRoadOnly && road.source !== null;
   const cells = buildAnalysisGrid(
     buildings,
     analysis.gridSize,
     site.northAngle,
     false,
     (b) => b.type === "인접건물",
+    roadOnly
+      ? { edgeFilter: (b, i) => road.walls.get(b.id)?.has(i) ?? false, includeRoof: false }
+      : {},
   );
+  const adjCount = buildings.filter((b) => b.type === "인접건물").length;
   const meshes = buildObstructionMeshes(buildings);
 
   const raycaster = new THREE.Raycaster();
@@ -144,6 +297,10 @@ export async function runSunHoursCheck(
   return {
     rule,
     timeStep,
+    passRatio,
+    roadFacingOnly: roadOnly,
+    roadSource: road.source,
+    excludedBuildings: roadOnly ? adjCount - road.walls.size : 0,
     samples,
     cells,
     results,

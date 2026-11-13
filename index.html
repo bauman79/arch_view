@@ -1835,8 +1835,14 @@
                 <button id="toggle-daylight" class="btn mini">채광사선 검토</button>
                 <button id="toggle-spacing" class="btn mini">인동거리 검토</button>
               </div>
+              <div class="row">
+                <label>
+                  <input type="checkbox" id="show-north-lines" checked />
+                  정북사선 검토선 표시
+                </label>
+              </div>
               <p class="hint">
-                기본값 = 건축법 시행령 제86조. 정북사선은 항상 자동 검토,
+                기본값 = 건축법 시행령 제86조. 정북사선은 항상 자동 검토(검토선만 끌 수 있음),
                 채광·인동은 토글을 켜면 이동·회전 중 실시간 갱신.
                 <code>PLAN_WIN</code> 레이어로 창면 표시 시 완화 기준 적용.
               </p>
@@ -1861,6 +1867,21 @@
                 <label for="sunhours-step">시간 간격(분)</label>
                 <input type="number" id="sunhours-step" value="10" step="5" min="5" max="60" />
               </div>
+              <div class="row">
+                <label>
+                  <input type="checkbox" id="sunhours-road-only" checked />
+                  도로에 접한 벽면만 판정
+                </label>
+              </div>
+              <div class="row">
+                <label for="sunhours-pass-ratio">동 적합 기준 확보율(%)</label>
+                <input type="number" id="sunhours-pass-ratio" value="50" step="5" min="1" max="100" />
+              </div>
+              <p class="hint">
+                인접건물의 도로 쪽 벽(<code>ROAD_AREA</code>, 없으면 <code>ROAD_CL</code> 기준)만 격자로
+                나눠, 그중 기준을 만족한 셀 비율이 위 값 이상이면 그 동은 "확보". 북향·측벽처럼 원래 해가
+                들지 않는 벽 때문에 모든 동이 미달로 나오던 문제를 피한다.
+              </p>
               <div class="row">
                 <button id="run-sunhours" class="btn primary">일조권 검토 실행</button>
                 <button id="clear-sunhours" class="btn mini">지우기</button>

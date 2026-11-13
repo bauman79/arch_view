@@ -1029,13 +1029,16 @@ function sunHoursRatio(s: SunHoursBuildingSummary): number | null {
 export function showSunHoursDetail(
   summaries: SunHoursBuildingSummary[],
   ruleLabel?: string,
+  passRatio = 1,
+  basis = "",
 ): void {
   const { overlay, body } = ensureSunHoursModal();
   body.innerHTML = "";
   if (ruleLabel) {
     const p = document.createElement("p");
     p.className = "hint";
-    p.textContent = `판정 기준: ${ruleLabel} — 셀 1개라도 미달이면 "미달"로 집계`;
+    p.textContent =
+      `판정 기준: ${ruleLabel} · ${basis}확보율 ${(passRatio * 100).toFixed(0)}% 이상이면 동 "확보"`;
     body.appendChild(p);
   }
   const sorted = [...summaries]
@@ -1043,7 +1046,7 @@ export function showSunHoursDetail(
     .sort((a, b) => sunHoursRatio(a)! - sunHoursRatio(b)!);
   for (const s of sorted) {
     const ratio = sunHoursRatio(s)!;
-    const allPass = ratio >= 1 - 1e-9;
+    const allPass = ratio >= passRatio - 1e-9;
     const div = document.createElement("div");
     div.className = "summary-card";
     let html =
@@ -1075,6 +1078,11 @@ export function renderSunHoursSummary(
   summaries: SunHoursBuildingSummary[] | null,
   ruleLabel?: string,
   note?: string,
+  judge: { passRatio: number; roadFacingOnly: boolean; excluded: number } = {
+    passRatio: 1,
+    roadFacingOnly: false,
+    excluded: 0,
+  },
 ): void {
   const root = document.getElementById("sunhours-summary")!;
   root.innerHTML = "";
@@ -1094,7 +1102,8 @@ export function renderSunHoursSummary(
     passCells += s.wall.passCells + s.roof.passCells;
     totalCells += s.wall.totalCells + s.roof.totalCells;
   }
-  const failBldgs = withCells.filter((s) => sunHoursRatio(s)! < 1 - 1e-9);
+  const failBldgs = withCells.filter((s) => sunHoursRatio(s)! < judge.passRatio - 1e-9);
+  const basis = judge.roadFacingOnly ? "도로 접면 " : "";
   const meanRatio =
     withCells.reduce((sum, s) => sum + sunHoursRatio(s)!, 0) / withCells.length;
 
@@ -1102,16 +1111,23 @@ export function renderSunHoursSummary(
   div.className = "summary-card";
   const failPct = ((failBldgs.length / withCells.length) * 100).toFixed(0);
   div.innerHTML =
-    `<div class="bname">인접건물 ${withCells.length}동 집계</div>` +
+    `<div class="bname">인접건물 ${withCells.length}동 집계` +
+    (judge.roadFacingOnly ? ` (도로 접면 기준)` : "") + `</div>` +
     `<div class="surf-line">평균 확보율: <b class="${meanRatio >= 1 - 1e-9 ? "ok" : ""}">` +
     `${(meanRatio * 100).toFixed(1)}%</b> (전체 셀 기준 ${((passCells / totalCells) * 100).toFixed(1)}%)</div>` +
     `<div class="surf-line">일조 미달: <b class="${failBldgs.length > 0 ? "bad" : "ok"}">` +
-    `${failBldgs.length}동</b> / ${withCells.length}동 (${failPct}%)</div>`;
+    `${failBldgs.length}동</b> / ${withCells.length}동 (${failPct}%) — ${basis}확보율 ` +
+    `${(judge.passRatio * 100).toFixed(0)}% 미만</div>` +
+    (judge.excluded > 0
+      ? `<div class="surf-line">도로에 접한 벽이 없어 판정 제외: ${judge.excluded}동</div>`
+      : "");
   root.appendChild(div);
 
   const detailBtn = document.createElement("button");
   detailBtn.textContent = "건물별 상세 보기 (팝업)";
-  detailBtn.addEventListener("click", () => showSunHoursDetail(summaries, ruleLabel));
+  detailBtn.addEventListener("click", () =>
+    showSunHoursDetail(summaries, ruleLabel, judge.passRatio, basis),
+  );
   root.appendChild(detailBtn);
 
   if (ruleLabel) {

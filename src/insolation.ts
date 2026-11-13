@@ -80,6 +80,12 @@ export function buildAnalysisGrid(
   northAngleDeg: number,
   excludeWindowWalls = false,
   isTarget: (b: Building) => boolean = (b) => b.analysisTarget,
+  opts: {
+    /** 이 벽(worldFootprint의 i번째 변)을 격자에 넣을지 — 일조권 도로 접면 판정용 */
+    edgeFilter?: (b: Building, edgeIndex: number) => boolean;
+    /** 지붕 셀 포함 여부 (기본 true) */
+    includeRoof?: boolean;
+  } = {},
 ): GridCell[] {
   const cells: GridCell[] = [];
   void northAngleDeg; // 방위 라벨은 pv.ts의 faceLabel()에서 별도 계산 — 여기선 필터링에 안 씀
@@ -101,6 +107,7 @@ export function buildAnalysisGrid(
       const ey = p2.y - p1.y;
       const len = Math.hypot(ex, ey);
       if (len < 1e-6) continue;
+      if (opts.edgeFilter && !opts.edgeFilter(b, i)) continue;
       if (
         excludeWindowWalls &&
         b.windowSegments.length > 0 &&
@@ -133,7 +140,8 @@ export function buildAnalysisGrid(
       }
     }
 
-    // 지붕: 바운딩 박스를 격자로 훑고 중심점이 폴리곤 안이면 셀 채택 (항상 포함 — 창 개념 없음)
+    // 지붕: 바운딩 박스를 격자로 훑고 중심점이 폴리곤 안이면 셀 채택 (창 개념 없음)
+    if (opts.includeRoof === false) continue;
     let minX = Infinity,
       minY = Infinity,
       maxX = -Infinity,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { faceLabel } from "./pv";
-import { passesRule, runSunHoursCheck } from "./sunhours";
+import { findRoadFacingWalls, judgeBuilding, passesRule, runSunHoursCheck } from "./sunhours";
 import { defaultProject, type Building, type Point2, type Project } from "./types";
 
 /**
@@ -161,5 +161,76 @@ describe("runSunHoursCheck — summaries 집계", () => {
     expect(s.wall.passCells).toBe(wallCells.filter((x) => x.res.pass).length);
     expect(s.roof.totalCells).toBe(roofCells.length);
     expect(s.roof.passCells).toBe(roofCells.filter((x) => x.res.pass).length);
+  });
+});
+
+/**
+ * 도로 접면 판정 — 인접건물의 도로 쪽 벽만 판정하고 동 단위는 확보율로 가른다.
+ * rect()는 남(0)→동(1)→북(2)→서(3) 순으로 변이 이어진다.
+ */
+describe("도로 접면 판정", () => {
+  const roadArea = (pts: Point2[]) => ({ layer: "ROAD_AREA" as const, points: pts, closed: true });
+
+  it("남쪽 도로(ROAD_AREA)에 면한 벽만 도로 접면", () => {
+    const adj = mkBuilding("a", "인접건물", rect(0, 0, 10, 10), 3, 3);
+    const r = findRoadFacingWalls([adj], [roadArea(rect(-20, -10, 30, -2))]); // 건물 남쪽 2~10m
+    expect(r.source).toBe("ROAD_AREA");
+    expect([...(r.walls.get("a") ?? [])]).toEqual([0]);
+  });
+
+  it("사이에 다른 건물이 막고 있으면 도로 접면이 아니다", () => {
+    const adj = mkBuilding("a", "인접건물", rect(0, 0, 10, 10), 3, 3);
+    const front = mkBuilding("b", "인접건물", rect(-5, -4, 15, -1), 3, 3); // 도로와 사이를 가로막음
+    const r = findRoadFacingWalls([adj, front], [roadArea(rect(-20, -12, 30, -6))]);
+    expect(r.walls.get("a")?.has(0) ?? false).toBe(false);
+    expect(r.walls.get("b")?.has(0)).toBe(true); // 앞 건물의 남쪽 벽은 도로 접면
+  });
+
+  it("ROAD_AREA가 없으면 도로중심선(ROAD_CL)을 가로지르는지로 판정", () => {
+    const adj = mkBuilding("a", "인접건물", rect(0, 0, 10, 10), 3, 3);
+    const cl = { layer: "ROAD_CL" as const, points: [{ x: -30, y: -8 }, { x: 40, y: -8 }], closed: false };
+    const r = findRoadFacingWalls([adj], [cl]);
+    expect(r.source).toBe("ROAD_CL");
+    expect([...(r.walls.get("a") ?? [])]).toEqual([0]);
+  });
+
+  it("도로 정보가 없으면 판정 근거 없음(source=null)", () => {
+    const adj = mkBuilding("a", "인접건물", rect(0, 0, 10, 10), 3, 3);
+    expect(findRoadFacingWalls([adj], []).source).toBeNull();
+  });
+
+  it("검토는 도로 쪽 벽에만 셀을 만들고 지붕은 빼며, 도로 없는 동은 판정 제외로 센다", async () => {
+    const front = mkBuilding("front", "인접건물", rect(0, 0, 10, 10), 3, 3);
+    const back = mkBuilding("back", "인접건물", rect(0, 40, 10, 50), 3, 3); // 도로에서 30m — 접면 없음
+    const p = mkProject([front, back]);
+    p.siteOverlays = [roadArea(rect(-20, -10, 30, -2))];
+    const r = await runSunHoursCheck(p);
+    expect(r.roadFacingOnly).toBe(true);
+    expect(r.cells.length).toBeGreaterThan(0);
+    expect(r.cells.every((c) => c.buildingId === "front" && c.surface === "wall")).toBe(true);
+    expect(r.cells.every((c) => c.normal.z > 0.99)).toBe(true); // three +z = 남쪽 → 남향 벽만
+    expect(r.excludedBuildings).toBe(1);
+  });
+
+  it("설정을 끄면 예전처럼 전체 벽·지붕", async () => {
+    const adj = mkBuilding("a", "인접건물", rect(0, 0, 10, 10), 3, 3);
+    const p = mkProject([adj]);
+    p.siteOverlays = [roadArea(rect(-20, -10, 30, -2))];
+    p.analysis.sunHours.roadFacingOnly = false;
+    const r = await runSunHoursCheck(p);
+    expect(r.roadFacingOnly).toBe(false);
+    expect(r.cells.some((c) => c.surface === "roof")).toBe(true);
+  });
+
+  it("judgeBuilding — 확보율이 기준 이상이면 확보, 셀 없으면 판정 제외", () => {
+    const s = (pass: number, total: number) => ({
+      buildingId: "x", name: "x",
+      wall: { passCells: pass, totalCells: total },
+      roof: { passCells: 0, totalCells: 0 },
+    });
+    expect(judgeBuilding(s(5, 10), 0.5)).toBe("pass");
+    expect(judgeBuilding(s(4, 10), 0.5)).toBe("fail");
+    expect(judgeBuilding(s(9, 10), 1)).toBe("fail"); // 예전 기준(셀 전부)
+    expect(judgeBuilding(s(0, 0), 0.5)).toBe("na");
   });
 });
