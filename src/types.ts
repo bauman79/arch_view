@@ -90,7 +90,11 @@ export type OverlayLayer =
   | "ADJ_BOUNDARY"
   | "ROAD_CL"
   | "PARK_BOUNDARY"
-  | "CONTOUR";
+  | "CONTOUR"
+  /** 도로 영역(닫힌 폴리라인) — 지면에 도로색으로 채워 표시만 한다(판정에는 ROAD_CL을 쓴다) */
+  | "ROAD_AREA"
+  /** 주변 필지선 — 참고용 얇은 선 */
+  | "PARCEL";
 
 export interface OverlayLine {
   layer: OverlayLayer;

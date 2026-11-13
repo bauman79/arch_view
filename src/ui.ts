@@ -733,6 +733,7 @@ export function renderSiteTotals(
   siteAreaM2: number,
 ): void {
   const t = siteUnitTotals(buildings);
+  const s = coverageStats(buildings, siteAreaM2);
   const totalsEl = document.getElementById("site-totals");
   if (totalsEl) {
     if (t.buildingCount === 0) {
@@ -741,13 +742,13 @@ export function renderSiteTotals(
       const mix = t.byType.map((u) => `${u.unitType} ${u.count}`).join(" / ");
       totalsEl.textContent =
         `계획주동 ${t.buildingCount}동 · 총 ${t.total}세대` +
-        (mix ? ` (${mix})` : "");
+        (mix ? ` (${mix})` : "") +
+        (s.farPct !== null ? ` · 용적률 ${s.farPct.toFixed(1)}%` : "");
     }
   }
-  renderUnitSummary(t);
+  renderUnitSummary(t, s, siteAreaM2);
   const bcrEl = document.getElementById("bcr-far");
   if (bcrEl) {
-    const s = coverageStats(buildings, siteAreaM2);
     bcrEl.textContent =
       s.bcrPct === null
         ? `건축면적 ${s.coverageM2.toFixed(0)}㎡ · 연면적 ${s.grossM2.toFixed(0)}㎡ — 대지면적을 입력하면 건폐율·용적률 표시`
@@ -760,7 +761,11 @@ export function renderSiteTotals(
  * 우측 패널 "세대수 요약" — 전체 세대수 합계 + 타입별 세대수 표.
  * unitType은 사용자 입력 문자열이라 innerHTML 대신 DOM 생성으로 넣는다.
  */
-function renderUnitSummary(t: SiteUnitTotals): void {
+function renderUnitSummary(
+  t: SiteUnitTotals,
+  cov: ReturnType<typeof coverageStats>,
+  siteAreaM2: number,
+): void {
   const host = document.getElementById("unit-summary-body");
   if (!host) return;
   host.innerHTML = "";
@@ -777,6 +782,19 @@ function renderUnitSummary(t: SiteUnitTotals): void {
   b.textContent = String(t.total);
   totalLine.append(`계획주동 ${t.buildingCount}동 · 총 `, b, "세대");
   host.appendChild(totalLine);
+
+  // 세대수와 함께 보는 밀도 지표 — 층수를 바꿀 때마다 같이 갱신된다
+  const far = document.createElement("div");
+  far.className = "unit-far";
+  if (cov.farPct === null) {
+    far.textContent = `연면적 ${Math.round(cov.grossM2).toLocaleString()}㎡ — 대지면적을 넣으면 용적률 표시`;
+  } else {
+    const fb = document.createElement("b");
+    fb.textContent = `${cov.farPct.toFixed(1)}%`;
+    far.append("용적률 ", fb,
+      ` · 건폐율 ${cov.bcrPct!.toFixed(1)}%  (연면적 ${Math.round(cov.grossM2).toLocaleString()}㎡ / 대지 ${Math.round(siteAreaM2).toLocaleString()}㎡)`);
+  }
+  host.appendChild(far);
 
   if (t.byType.length === 0) return;
   const table = document.createElement("table");

@@ -114,6 +114,22 @@
       <td>접미사 없으면 기본 1층. 색상 6(자홍) 권장</td>
     </tr>
     <tr>
+      <td><code>UNIT_&lt;평형&gt;</code></td>
+      <td>평형별 전용공간</td><td>LWPOLYLINE (닫힘)</td>
+      <td>예: <code>UNIT_59</code>, <code>UNIT_84</code>. 주동 외곽선 <b>안</b>에 세대마다 하나씩 —
+        동별로 세어 평형별 층당 세대수가 됩니다. 세대수 = 층당 세대 × 층수</td>
+    </tr>
+    <tr>
+      <td><code>ROAD_AREA</code></td>
+      <td>도로 영역</td><td>LWPOLYLINE (닫힘)</td>
+      <td>지면에 도로색으로 채워 표시(채광사선 기준은 <code>ROAD_CL</code>)</td>
+    </tr>
+    <tr>
+      <td><code>PARCEL</code></td>
+      <td>주변 필지선</td><td>LWPOLYLINE</td>
+      <td>참고용 얇은 선</td>
+    </tr>
+    <tr>
       <td><code>SITE_BOUNDARY</code></td>
       <td>대지 경계선</td><td>LWPOLYLINE (닫힘)</td>
       <td>반드시 닫힌 폴리라인. 색상 1(빨강) 권장. <code>ADJ_BOUNDARY</code>가 없을 때

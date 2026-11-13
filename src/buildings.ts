@@ -20,7 +20,12 @@ const OVERLAY_COLOR: Record<OverlayLine["layer"], number> = {
   ROAD_CL: 0x4ac8e6,
   PARK_BOUNDARY: 0x4ac86a,
   CONTOUR: 0xa07a4a,
+  ROAD_AREA: 0x55606e,
+  PARCEL: 0x3a4658, // 참고용 필지선 — 배경에 묻힐 정도로 어둡게
 };
+
+/** 도로 영역 채움 색 — 회색 지면·녹색 대상지와 구분되는 짙은 아스팔트색 */
+const ROAD_FILL_COLOR = 0x2f3540;
 
 /**
  * 대지(SITE_BOUNDARY) 내부 바닥 채움 — 씬 배경(0x070d1a)보다 충분히 밝은 중간 회색이라야
@@ -60,10 +65,18 @@ export function createOverlayGroup(
 ): THREE.Group {
   const group = new THREE.Group();
   const y = 0.05;
+  const sites = overlays.filter((o) => o.layer === "SITE_BOUNDARY" && o.points.length >= 3);
   for (const o of overlays) {
-    if (o.layer === "SITE_BOUNDARY") {
+    if (o.layer === "SITE_BOUNDARY" && !containsOtherSite(o, sites)) {
       // 평지면 회색 채움, 지형이 있으면 지형면을 따라 얹은 색 채움으로 대상지를 구분한다
       const fill = elevate ? createDrapedSiteFill(o, elevate) : createSiteFill(o);
+      if (fill) group.add(fill);
+    }
+    if (o.layer === "ROAD_AREA" && o.closed && o.points.length >= 3) {
+      // 도로는 대상지 채움보다 한 단계 아래 깊이로 — 겹치면 대상지가 위에 보이게
+      const fill = elevate
+        ? createDrapedSiteFill(o, elevate, ROAD_FILL_COLOR, "road-drape", -1)
+        : createSiteFill(o, ROAD_FILL_COLOR, "road-fill", -3);
       if (fill) group.add(fill);
     }
     const src = o.closed ? [...o.points, o.points[0]] : o.points;
@@ -104,6 +117,9 @@ export function createOverlayGroup(
 function createDrapedSiteFill(
   o: OverlayLine,
   elevate: (x: number, y: number) => number,
+  color = SITE_DRAPE_COLOR,
+  name = "site-drape",
+  offset = -2,
 ): THREE.Mesh | null {
   const poly = o.points;
   if (poly.length < 3) return null;
@@ -143,17 +159,31 @@ function createDrapedSiteFill(
   const mesh = new THREE.Mesh(
     geom,
     new THREE.MeshLambertMaterial({
-      color: SITE_DRAPE_COLOR,
+      color,
       side: THREE.DoubleSide,
       // 지형면과 거의 같은 높이라 깊이값을 당겨 깜빡임(z-fighting) 없이 위에 보이게
       polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
+      polygonOffsetFactor: offset,
+      polygonOffsetUnits: offset,
     }),
   );
   mesh.receiveShadow = true;
-  mesh.name = "site-drape";
+  mesh.name = name;
   return mesh;
+}
+
+/**
+ * 다른 SITE_BOUNDARY를 품은 큰 외곽선인가 — 구역계 안에 획지들을 다시 그린 도면에서
+ * 바깥 외곽까지 채우면 같은 자리에 면이 두 겹 생겨 깜빡이므로 그 외곽은 선만 그린다.
+ */
+function containsOtherSite(o: OverlayLine, sites: OverlayLine[]): boolean {
+  const area = Math.abs(signedArea(o.points));
+  return sites.some((s) => {
+    if (s === o || Math.abs(signedArea(s.points)) >= area) return false;
+    let cx = 0, cy = 0;
+    for (const p of s.points) { cx += p.x; cy += p.y; }
+    return pointInPolygon(cx / s.points.length, cy / s.points.length, o.points);
+  });
 }
 
 /**
@@ -161,7 +191,12 @@ function createDrapedSiteFill(
  * SITE_BOUNDARY는 규약상 닫힌 폴리라인이지만, 열려 있어도 닫힌 것으로 보고 채운다
  * (DXF 파싱 단계에서 이미 "닫힌 것으로 간주" 경고를 내보내므로 여기서 또 막지 않는다).
  */
-function createSiteFill(o: OverlayLine): THREE.Mesh | null {
+function createSiteFill(
+  o: OverlayLine,
+  color = SITE_FILL_COLOR,
+  name = "site-fill",
+  offset = -4,
+): THREE.Mesh | null {
   if (o.points.length < 3) return null;
   const shape = new THREE.Shape();
   o.points.forEach((p, i) => {
@@ -177,17 +212,17 @@ function createSiteFill(o: OverlayLine): THREE.Mesh | null {
   const mesh = new THREE.Mesh(
     geom,
     new THREE.MeshLambertMaterial({
-      color: SITE_FILL_COLOR,
+      color,
       side: THREE.DoubleSide,
       // 아래 지면판과 깊이가 근접해 얼룩(z-fighting)이 생기는 것을 막는다 — 항상 지면판 위로
       polygonOffset: true,
-      polygonOffsetFactor: -4,
-      polygonOffsetUnits: -4,
+      polygonOffsetFactor: offset,
+      polygonOffsetUnits: offset,
     }),
   );
   mesh.position.y = SITE_FILL_Y;
   mesh.receiveShadow = true;
-  mesh.name = "site-fill";
+  mesh.name = name;
   return mesh;
 }
 

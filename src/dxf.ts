@@ -25,7 +25,15 @@ const OVERLAY_LAYERS: OverlayLayer[] = [
   "ADJ_BOUNDARY",
   "ROAD_CL",
   "PARK_BOUNDARY",
+  "ROAD_AREA",
+  "PARCEL",
 ];
+
+/**
+ * 평형별 전용공간 레이어 — UNIT_<전용면적>(예: UNIT_59, UNIT_84). 주동 외곽선 안에 세대마다
+ * 닫힌 폴리라인 하나씩 그리면, 동별로 개수를 세어 "평형별 층당 세대수"로 넣는다.
+ */
+const UNIT_LAYER_RE = /^UNIT_(\d+(?:\.\d+)?)$/;
 
 /** 레이어명 접미사로 층수 지정: PLAN_BLDG_15F, ADJ_BLDG_5F 등 (대소문자 무관) */
 const FLOOR_SUFFIX_RE = /_(\d+)F$/i;
@@ -90,6 +98,8 @@ export interface DxfLoadResult {
   unitScale: number;
   /** 건물 안 층수 문자로 층수가 정해진 동 수 */
   floorsFromText: number;
+  /** UNIT_<평형> 전용공간으로 세대 구성이 정해진 동 수 */
+  unitsFromDrawing: number;
   /** 배율을 어떻게 정했는지 — 상태 표시용 */
   unitSource: UnitSource;
 }
@@ -279,6 +289,8 @@ export function parseDxfBuildings(
   const planWinSegments: [Point2, Point2][] = [];
   const adjWinSegments: [Point2, Point2][] = [];
 
+  /** 평형별 전용공간 (도면 좌표 m) — 건물이 정해진 뒤 외곽선 안에 든 것을 세어 세대 구성으로 쓴다 */
+  const unitPolys: { unitType: string; points: Point2[] }[] = [];
   /** 층수 문자 후보 (도면 좌표 m) — 건물이 정해진 뒤 외곽선 안에 든 것을 찾아 층수로 쓴다 */
   const floorTexts: { x: number; y: number; floors: number; layer: string }[] = [];
 
@@ -374,6 +386,18 @@ export function parseDxfBuildings(
         points: pts3.map((p) => ({ x: p.x, y: p.y })),
         closed,
       });
+      continue;
+    }
+
+    const unitMatch = upper.match(UNIT_LAYER_RE);
+    if (unitMatch) {
+      // 첫점=끝점 중복 제거 — 닫힘 플래그 없이 그린 것도 받는다
+      const pts = [...vertices];
+      if (pts.length >= 2) {
+        const a = pts[0], b = pts[pts.length - 1];
+        if (Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9) pts.pop();
+      }
+      if (pts.length >= 3) unitPolys.push({ unitType: `${unitMatch[1]}㎡`, points: pts });
       continue;
     }
 
@@ -571,8 +595,11 @@ export function parseDxfBuildings(
   }
 
   const floorsFromText = applyFloorTexts(buildings, sourceLayers, floorTexts, warnings);
+  const unitsFromDrawing = applyUnitPolygons(buildings, unitPolys, warnings);
 
-  return { buildings, overlays, contourPoints, warnings, unitScale, unitSource, floorsFromText };
+  return {
+    buildings, overlays, contourPoints, warnings, unitScale, unitSource, floorsFromText, unitsFromDrawing,
+  };
 }
 
 /**
@@ -671,4 +698,59 @@ function applyFloorTexts(
     );
   }
   return applied;
+}
+
+/** 폴리곤 면적 무게중심 — 오목해도 대개 안쪽이지만 아니면 꼭짓점 판정으로 보완한다 */
+function polygonCentroid(pts: Point2[]): Point2 {
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    const f = p.x * q.y - q.x * p.y;
+    a += f; cx += (p.x + q.x) * f; cy += (p.y + q.y) * f;
+  }
+  if (Math.abs(a) < 1e-12) {
+    return { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length };
+  }
+  return { x: cx / (3 * a), y: cy / (3 * a) };
+}
+
+/**
+ * 평형별 전용공간(UNIT_<평형>)을 주동마다 세어 세대 구성(평형별 층당 세대수)으로 넣는다.
+ * 전용공간 하나 = 그 층의 세대 하나. 전용공간이 하나라도 든 계획주동만 바꾸고, 없는 동은
+ * 기본 구성을 그대로 둔다. 어느 주동에도 안 든 전용공간은 알린다.
+ * @returns 세대 구성이 도면으로 정해진 동 수
+ */
+function applyUnitPolygons(
+  buildings: Building[],
+  units: { unitType: string; points: Point2[] }[],
+  warnings: string[],
+): number {
+  if (units.length === 0) return 0;
+  const plans = buildings.filter((b) => b.type === "계획주동");
+  const counts = new Map<Building, Map<string, number>>();
+  let orphan = 0;
+  for (const u of units) {
+    const c = polygonCentroid(u.points);
+    const inside = (b: Building) =>
+      pointInPolygon(c.x, c.y, b.footprint) ||
+      u.points.filter((p) => pointInPolygon(p.x, p.y, b.footprint)).length > u.points.length / 2;
+    const host = plans.find(inside);
+    if (!host) { orphan++; continue; }
+    const m = counts.get(host) ?? new Map<string, number>();
+    m.set(u.unitType, (m.get(u.unitType) ?? 0) + 1);
+    counts.set(host, m);
+  }
+  for (const [b, m] of counts) {
+    b.unitMix = [...m.entries()]
+      .sort((x, y) => parseFloat(x[0]) - parseFloat(y[0]))
+      .map(([unitType, countPerFloor]) => ({ unitType, countPerFloor }));
+    b.unitsPerFloor = b.unitMix.reduce((s, e) => s + e.countPerFloor, 0);
+  }
+  if (orphan > 0) {
+    warnings.push(
+      `UNIT_ 전용공간 ${orphan}개가 어느 계획주동 외곽선 안에도 있지 않아 세대수에서 빠졌습니다 — ` +
+        `전용공간이 주동 외곽선(PLAN_) 안쪽에 오게 그려 주세요.`,
+    );
+  }
+  return counts.size;
 }

@@ -8,6 +8,7 @@ import {
   type UnitMode,
 } from "./dxf";
 import { Viewer, VIEW_PRESET_LABEL, type ViewPreset } from "./viewer";
+import { pointInPolygon, signedArea } from "./geom2d";
 import {
   applyOffset,
   createBuildingObject,
@@ -110,6 +111,7 @@ import {
   statutorySetbackRules,
   type Building,
   type MassType,
+  type OverlayLine,
   type Point2,
   type Project,
   type SetbackRules,
@@ -567,11 +569,34 @@ function rebuildOverlays(): void {
   applyTerrainVisibility(); // 새로 만든 site-fill에 지형 표시 상태(채움 숨김) 재적용
 }
 
+/**
+ * 대지경계로 대지면적(㎡) 계산 — 다른 대지경계를 품은 바깥 외곽선(구역계를 획지로 다시 나눠
+ * 그린 경우)은 빼고, 서로 포함되지 않는 획지 면적만 더한다. 같은 땅을 두 번 세지 않기 위함.
+ */
+function outerSiteArea(overlays: OverlayLine[]): number {
+  const sites = overlays.filter((o) => o.layer === "SITE_BOUNDARY" && o.points.length >= 3);
+  const area = (o: OverlayLine) => Math.abs(signedArea(o.points));
+  const center = (o: OverlayLine) => ({
+    x: o.points.reduce((s, p) => s + p.x, 0) / o.points.length,
+    y: o.points.reduce((s, p) => s + p.y, 0) / o.points.length,
+  });
+  let sum = 0;
+  for (const o of sites) {
+    const isContainer = sites.some((t) => {
+      if (t === o || area(t) >= area(o)) return false;
+      const c = center(t);
+      return pointInPolygon(c.x, c.y, o.points);
+    });
+    if (!isContainer) sum += area(o);
+  }
+  return sum;
+}
+
 function loadDxfText(text: string, sourceName: string, merge: boolean): void {
   const unitMode = (document.getElementById("unit-select") as HTMLSelectElement)
     .value as UnitMode;
   try {
-    const { buildings, overlays, contourPoints, warnings, unitSource, floorsFromText } = parseDxfBuildings(
+    const { buildings, overlays, contourPoints, warnings, unitSource, floorsFromText, unitsFromDrawing } = parseDxfBuildings(
       text,
       unitMode,
     );
@@ -603,6 +628,16 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     const placedPlans = planBuildings.map((lib) => cloneBuildingFromLibrary(lib, 0));
     project.buildings.push(...placedPlans, ...adjBuildings);
 
+    // 대지면적이 비어 있으면 대지경계로 채운다 — 사용자가 직접 넣은 값은 덮어쓰지 않는다
+    let autoSiteArea = 0;
+    if (!(project.site.siteAreaM2 > 0)) {
+      autoSiteArea = outerSiteArea(project.siteOverlays);
+      if (autoSiteArea > 0) {
+        siteAreaInput.value = String(Math.round(autoSiteArea));
+        project.site.siteAreaM2 = Math.round(autoSiteArea);
+      }
+    }
+
     rebuildTerrain(); // rebuildAll보다 먼저 — 건물 G.L. 계산이 terrainModel을 참조
     rebuildAll();
     rebuildOverlays();
@@ -612,11 +647,14 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     updateRotationHandle();
     invalidateAnalysis();
     updateSetbackChecks();
+    updateSiteTotals();
     const winCount = buildings.reduce((s, b) => s + b.windowSegments.length, 0);
     let msg =
       `${sourceName} ${merge ? "병합" : "불러옴"} (${unitSourceLabel(unitSource)}) — ` +
       `도면 위치 그대로 계획주동 ${planBuildings.length}동 · 인접건물 ${adjBuildings.length}동 배치` +
       (floorsFromText > 0 ? ` (층수 문자 반영 ${floorsFromText}동, 나머지 1층 — 목록에서 층수 입력)` : ` (층수 정보 없는 동은 1층 — 목록에서 층수 입력)`);
+    if (unitsFromDrawing > 0) msg += `, 평형 구성 반영 ${unitsFromDrawing}동(UNIT_ 전용공간)`;
+    if (autoSiteArea > 0) msg += `, 대지면적 ${Math.round(autoSiteArea).toLocaleString()}㎡ 자동 입력`;
     if (overlays.length > 0) msg += `, 오버레이 ${overlays.length}개`;
     if (winCount > 0) msg += `, 창면 ${winCount}개`;
     if (terrainModel) {

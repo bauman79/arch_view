@@ -23,6 +23,8 @@ const ENTITY_COLOR: Record<string, number> = {
   ROAD_CL: 4,
   PARK_BOUNDARY: 3,
   CONTOUR: 7,
+  ROAD_AREA: 8,
+  PARCEL: 9,
 };
 
 const FMT = (v: number): string => {

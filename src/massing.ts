@@ -125,7 +125,16 @@ export function siteUnitTotals(buildings: Building[]): SiteUnitTotals {
   return {
     buildingCount: count,
     total,
-    byType: [...byType].map(([unitType, c]) => ({ unitType, count: c })),
+    // 평형 숫자순(39 → 59 → 84 → 101)으로 — 도면에 나온 순서대로면 표가 뒤섞여 읽기 어렵다.
+    // 숫자가 아닌 이름은 원래 순서를 지킨 채 뒤로 보낸다.
+    byType: [...byType]
+      .map(([unitType, c], i) => ({ unitType, count: c, i, n: parseFloat(unitType) }))
+      .sort((a, b) =>
+        Number.isNaN(a.n) || Number.isNaN(b.n)
+          ? (Number.isNaN(a.n) ? 1 : 0) - (Number.isNaN(b.n) ? 1 : 0) || a.i - b.i
+          : a.n - b.n,
+      )
+      .map(({ unitType, count }) => ({ unitType, count })),
   };
 }
 
