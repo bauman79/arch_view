@@ -516,6 +516,19 @@
         border-top: 1px solid #e2e8f0;
       }
 
+      .list-section-heading.with-btn { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+      .sun-probe { position: fixed; z-index: 50; min-width: 200px; max-width: 280px; padding: 8px 10px; border-radius: 8px;
+        background: var(--panel, #1c1f26); color: var(--text, #e8e8e8); border: 1px solid #f5a623; box-shadow: 0 4px 16px #0006;
+        font-size: 12px; pointer-events: auto; }
+      .sun-probe .sp-title { font-weight: 600; margin: 0 16px 4px 0; }
+      .sun-probe .sp-row { display: flex; justify-content: space-between; gap: 8px; }
+      .sun-probe .sp-verdict { margin-top: 4px; font-weight: 600; }
+      .sun-probe .sp-verdict.pass { color: #4c8bf5; }
+      .sun-probe .sp-verdict.fail { color: #e5484d; }
+      .sun-probe .sp-pre { opacity: .75; font-size: 11px; margin-top: 2px; }
+      .sun-probe-x { position: absolute; top: 4px; right: 6px; background: none; border: 0; color: inherit; cursor: pointer; }
+      .plan-lock-btn { font-size: 11px; padding: 2px 8px; }
+      .plan-lock-btn.active { border-color: #f5a623; color: #f5a623; }
       .list-section-heading:first-child {
         margin-top: 0;
         padding-top: 0;
@@ -2262,6 +2275,23 @@
           <button id="reset-save-first" class="btn primary">저장 후 초기화</button>
           <button id="reset-discard" class="btn">저장 안 함</button>
           <button id="reset-cancel" class="btn">취소</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= DXF 불러온 뒤 계획주동 고정/이동 선택 ================= -->
+    <div id="lock-modal" class="modal-overlay" hidden>
+      <div class="modal-box">
+        <h2>계획주동을 움직일까요?</h2>
+        <p class="hint" id="lock-summary"></p>
+        <p class="hint">
+          고정하면 계획주동의 <b>위치·회전만</b> 도면 그대로 고정되고, 왼쪽 목록에 동별 항목을 펼치지 않습니다.
+          층수·층고는 3D에서 동을 클릭해 오른쪽 상세 패널에서 그대로 바꿀 수 있습니다.
+          나중에 목록의 <b>동 이동하기</b> 버튼으로 언제든 바꿀 수 있습니다.
+        </p>
+        <div class="row">
+          <button id="lock-fixed" class="btn primary">고정 (도면 위치 그대로)</button>
+          <button id="lock-movable" class="btn">이동 가능</button>
         </div>
       </div>
     </div>

@@ -56,6 +56,10 @@ export interface UiCallbacks {
   onDuplicate(b: Building): void;
   /** 인접건물 시설 용도·교실 층 변경 — 교육·종교시설 일조 결과 무효화 */
   onFacilityChange(b: Building): void;
+  /** 계획주동 고정 여부 — 고정이면 목록을 숨기고 이동·회전·반전을 막는다 */
+  isPlanLocked(): boolean;
+  /** 고정 ↔ 이동 전환 */
+  onTogglePlanLock(): void;
 }
 
 /** 건물별 법적 검토 상태 도트 4종 — 접힌 아코디언 행에서도 한눈에 보이도록 */
@@ -141,12 +145,33 @@ export function renderBuildingList(
   const adjs = buildings.filter((b) => b.type === "인접건물");
 
   if (plans.length > 0) {
-    root.appendChild(sectionHeading(`계획주동 (${plans.length})`));
-    root.appendChild(statusDotLegend());
-    for (const b of plans) {
-      root.appendChild(
-        renderAccordionItem(b, b.id === selectedId, statusMap.get(b.id) ?? emptyBuildingStatus(), cb),
-      );
+    const locked = cb.isPlanLocked();
+    const head = sectionHeading(`계획주동 (${plans.length})`);
+    head.classList.add("with-btn");
+    const lockBtn = document.createElement("button");
+    lockBtn.className = "btn mini plan-lock-btn" + (locked ? "" : " active");
+    lockBtn.textContent = locked ? "🔒 동 이동하기" : "🔓 고정하기";
+    lockBtn.title = locked
+      ? "계획주동을 끌어서 이동·회전할 수 있게 하고 동별 목록을 펼칩니다"
+      : "계획주동을 도면 위치에 고정하고 동별 목록을 접습니다";
+    lockBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      cb.onTogglePlanLock();
+    });
+    head.appendChild(lockBtn);
+    root.appendChild(head);
+    if (locked) {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = "위치 고정됨 (이동·회전만 막힘) — 3D 화면에서 동을 클릭하면 오른쪽 상세 패널에서 층수·층고를 바꿀 수 있습니다.";
+      root.appendChild(hint);
+    } else {
+      root.appendChild(statusDotLegend());
+      for (const b of plans) {
+        root.appendChild(
+          renderAccordionItem(b, b.id === selectedId, statusMap.get(b.id) ?? emptyBuildingStatus(), cb),
+        );
+      }
     }
   }
   // 인접건물은 수십 동이 될 수 있어 목록을 채우지 않는다 — 3D 화면에서 클릭해
@@ -503,8 +528,10 @@ function fillAccordionBody(
       const numRow2 = document.createElement("div");
       numRow2.className = "num-row";
 
+      const locked = cb.isPlanLocked();
       const rotInput = numberInput(b.offset.rotation, -360, 360, 1);
       rotInput.classList.add("rot-input");
+      rotInput.disabled = locked;
       rotInput.addEventListener("change", () => {
         b.offset.rotation = clampNum(rotInput, -360, 360);
         heightInfo.textContent = heightText(b);
@@ -541,6 +568,9 @@ function fillAccordionBody(
       const mirrorState = document.createElement("span");
       mirrorState.className = "mirror-state";
       mirrorState.textContent = `미러: ${mirrorLabel(b)}`;
+      mirrorHBtn.disabled = locked;
+      mirrorVBtn.disabled = locked;
+      if (locked) mirrorState.textContent += " · 고정됨(목록의 '동 이동하기'로 해제)";
       mirrorRow.append(mirrorHBtn, mirrorVBtn, mirrorState);
       card.appendChild(mirrorRow);
     }

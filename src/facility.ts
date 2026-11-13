@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { worldFootprint, worldTransformer } from "./buildings";
 import { pointInPolygon } from "./geom2d";
-import { buildObstructionMeshes, disposeObstructionMeshes, RAY_EPS, RAY_FAR } from "./insolation";
+import { buildObstructionMeshes, disposeObstructionMeshes } from "./insolation";
+import { pointSunHours } from "./sunhours";
 import { yieldToEventLoop } from "./pv";
 import { sunSamples } from "./sun";
 import {
@@ -169,7 +170,6 @@ export async function runFacilityCheck(
     TOTAL_END - timeStep,
     timeStep,
   );
-  const stepH = timeStep / 60;
 
   const facilities = buildings.filter((b) => b.type === "인접건물" && b.use);
   const noWindows: string[] = [];
@@ -203,29 +203,9 @@ export async function runFacilityCheck(
   // 사업 전 = 계획주동을 뺀 차폐, 사업 후 = 전체 차폐
   const beforeMeshes = buildObstructionMeshes(buildings.filter((b) => b.type !== "계획주동"));
   const afterMeshes = buildObstructionMeshes(buildings);
-  const raycaster = new THREE.Raycaster();
-  raycaster.far = RAY_FAR;
-  (raycaster as any).firstHitOnly = true;
-  const origin = new THREE.Vector3();
   const useOf = new Map(facilities.map((b) => [b.id, b.use as FacilityUse]));
-
-  const measure = (p: FacilityPoint, meshes: THREE.Mesh[]): SunHoursPair => {
-    const [cs, ce] = continuousWindow(useOf.get(p.buildingId)!, settings);
-    let total = 0, run = 0, best = 0;
-    for (const s of samples) {
-      let lit = false;
-      if (s.dir && p.normal.dot(s.dir) > 1e-4) {
-        origin.copy(p.position).addScaledVector(p.normal, RAY_EPS);
-        raycaster.set(origin, s.dir);
-        lit = meshes.length === 0 || raycaster.intersectObjects(meshes, false).length === 0;
-      }
-      if (lit) total += stepH;
-      if (s.minutes >= cs && s.minutes < ce) {
-        if (lit) { run += stepH; best = Math.max(best, run); } else run = 0;
-      }
-    }
-    return { continuous: best, total };
-  };
+  const measure = (p: FacilityPoint, meshes: THREE.Mesh[]): SunHoursPair =>
+    pointSunHours(samples, timeStep, p.position, p.normal, meshes, continuousWindow(useOf.get(p.buildingId)!, settings));
 
   const CHUNK = 100;
   try {

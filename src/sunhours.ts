@@ -208,6 +208,46 @@ export function passesRule(rule: SunHoursRule, continuousH: number, totalH: numb
 }
 
 /**
+ * 한 지점(벽·지붕 위)의 직달 일조시간 — 시설 창문 검토·클릭 측정 공용.
+ * @param window 연속 일조를 셀 구간 (분) — 기본 09~15시
+ */
+export function pointSunHours(
+  samples: SunSample[],
+  stepMin: number,
+  position: THREE.Vector3,
+  normal: THREE.Vector3,
+  meshes: THREE.Mesh[],
+  window: [number, number] = [CONTINUOUS_START, CONTINUOUS_END],
+): { continuous: number; total: number } {
+  const rc = new THREE.Raycaster();
+  rc.far = RAY_FAR;
+  (rc as any).firstHitOnly = true;
+  const origin = new THREE.Vector3();
+  const stepH = stepMin / 60;
+  let total = 0, run = 0, best = 0;
+  for (const s of samples) {
+    let lit = false;
+    if (s.dir && normal.dot(s.dir) > 1e-4) {
+      origin.copy(position).addScaledVector(normal, RAY_EPS);
+      rc.set(origin, s.dir);
+      lit = meshes.length === 0 || rc.intersectObjects(meshes, false).length === 0;
+    }
+    if (lit) total += stepH;
+    if (s.minutes >= window[0] && s.minutes < window[1]) {
+      if (lit) { run += stepH; best = Math.max(best, run); } else run = 0;
+    }
+  }
+  return { continuous: best, total };
+}
+
+/** 일조권 검토와 같은 시각 샘플 (08:00 ~ 16:00-간격) */
+export function sunHoursSamples(project: Project): SunSample[] {
+  const { site, analysis } = project;
+  const step = analysis.sunHours.timeStep;
+  return sunSamples(analysis.date, site.latitude, site.longitude, site.northAngle, TOTAL_START, TOTAL_END - step, step);
+}
+
+/**
  * 인접건물 대상 격자·레이캐스팅 판정 실행. 계산량이 PV(M4)와 비슷한 규모라 같은
  * 청크 비동기 패턴(yieldToEventLoop)을 재사용한다.
  */

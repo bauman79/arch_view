@@ -81,6 +81,8 @@ import {
 import {
   createSunHoursOverlay,
   judgeBuilding,
+  pointSunHours,
+  sunHoursSamples,
   runSunHoursCheck,
   type SunHoursResult,
 } from "./sunhours";
@@ -115,9 +117,11 @@ import type {
   LbmStopMessage,
 } from "./lbm.worker";
 import { createLbmHeatmap, type LbmHeatmap } from "./lbmvis";
+import { buildObstructionMeshes, disposeObstructionMeshes } from "./insolation";
 import {
   buildingHeight,
   defaultProject,
+  FACILITY_USE_LABEL,
   mirrorLabel,
   seoulSetbackRules,
   statutorySetbackRules,
@@ -182,6 +186,8 @@ let selectedId: string | null = null;
 let lastNorthSetback: NorthSetbackResult | null = null;
 let lastSunHours: SunHoursResult | null = null;
 let lastFacility: FacilityResult | null = null;
+/** 계획주동 고정 — DXF를 불러올 때 고른다. 고정이면 드래그·회전·반전을 막고 목록을 접는다 */
+let planLocked = false;
 let facilityRunning = false;
 let facilityGroup: THREE.Group | null = null;
 let sunHoursRunning = false;
@@ -525,6 +531,8 @@ function refreshList(): void {
     },
     onDelete: (b) => deleteBuilding(b),
     onDuplicate: (b) => duplicateBuilding(b),
+    isPlanLocked: () => planLocked,
+    onTogglePlanLock: () => setPlanLocked(!planLocked),
     onFacilityChange: () => {
       clearFacility("시설 용도·교실 층이 바뀌어 결과가 초기화되었습니다. 다시 실행하세요.");
       refreshList();
@@ -555,7 +563,25 @@ function deleteBuilding(b: Building): void {
 }
 
 /** 같은 footprint·평형구성의 새 인스턴스를 장면에 복제 (겹치지 않게 남쪽으로 살짝 이동) */
+/** 계획주동 고정/이동 전환 */
+function setPlanLocked(v: boolean, quiet = false): void {
+  planLocked = v;
+  if (v) {
+    drag = null;
+    rotate = null;
+  }
+  refreshList();
+  updateRotationHandle();
+  if (!quiet) {
+    setStatus(v
+      ? "계획주동을 도면 위치에 고정했습니다 — 목록의 '동 이동하기'로 다시 움직일 수 있습니다."
+      : "계획주동 이동 가능 — 3D에서 동을 끌어 이동, 주황 고리 구슬로 회전합니다.");
+  }
+}
+
 function duplicateBuilding(b: Building): void {
+  // 복제한 동은 옮겨야 쓸모가 있으므로 이동 가능 상태로 바꾼다
+  if (planLocked) setPlanLocked(false, true);
   sceneSeq++;
   const clone: Building = {
     ...b,
@@ -689,11 +715,32 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     if (warnings.length > 0) msg += ` (알림 ${warnings.length}건 — "자세히")`;
     setStatus(msg, warnings.length > 0 ? warnings.join("\n\n") : undefined);
     for (const w of warnings) console.warn("[DXF]", w);
+    if (planBuildings.length > 0) askPlanLock(planBuildings.length);
   } catch (err) {
     setStatus(`불러오기 실패: ${(err as Error).message}`);
     console.error(err);
   }
 }
+
+const lockModal = document.getElementById("lock-modal") as HTMLElement;
+
+/** DXF를 불러온 뒤 계획주동을 고정할지 묻는다 — 답하기 전까지는 고정(실수로 밀리지 않게) */
+function askPlanLock(count: number): void {
+  planLocked = true;
+  refreshList();
+  updateRotationHandle();
+  const summary = document.getElementById("lock-summary");
+  if (summary) summary.textContent = `계획주동 ${count}동을 도면 위치 그대로 불러왔습니다.`;
+  lockModal.hidden = false;
+}
+document.getElementById("lock-fixed")!.addEventListener("click", () => {
+  lockModal.hidden = true;
+  setPlanLocked(true);
+});
+document.getElementById("lock-movable")!.addEventListener("click", () => {
+  lockModal.hidden = true;
+  setPlanLocked(false);
+});
 
 // ---------- 건물 라이브러리 — 기본 샘플 템플릿 + DXF 템플릿, 선택 추가/전체 선택/해제 ----------
 
@@ -739,6 +786,7 @@ function cloneBuildingFromLibrary(lib: Building, stagger: number): Building {
 }
 
 function addLibrarySelectionToScene(): void {
+  if (planLocked && libraryCheckedIds.size > 0) setPlanLocked(false, true);
   if (libraryCheckedIds.size === 0) {
     setStatus("장면에 추가할 건물을 라이브러리에서 선택하세요.");
     return;
@@ -882,6 +930,9 @@ function invalidateAnalysis(): void {
     renderSunHoursMapSummary(null, note);
   }
   if (lastFacility) clearFacility(note);
+  // 지점 일조 측정 — 배치가 바뀌면 차폐가 달라지므로 다시 만들고 떠 있던 값은 닫는다
+  disposeProbeMeshes();
+  hideSunProbe();
 }
 
 /** 교육·종교시설 창문 일조 결과 지우기 */
@@ -2113,7 +2164,7 @@ function buildingCenter(b: Building): { x: number; z: number } {
 }
 
 function updateRotationHandle(): void {
-  const b = selectedPlanBuilding();
+  const b = planLocked ? null : selectedPlanBuilding();
   if (!b) {
     handleGroup.visible = false;
     return;
@@ -2252,7 +2303,7 @@ canvas.addEventListener("pointerdown", (e) => {
   const b = project.buildings.find(
     (bb) => bb.id === group.userData.buildingId,
   );
-  if (!b || b.type !== "계획주동") return;
+  if (!b || b.type !== "계획주동" || planLocked) return;
   const hit = groundHit(e);
   if (!hit) return;
   drag = {
@@ -2346,13 +2397,119 @@ canvas.addEventListener("pointerup", (e) => {
       /* noop */
     }
   }
-  // 드래그가 아닌 짧은 클릭/탭이면 선택 처리
+  // 드래그가 아닌 짧은 클릭/탭이면 선택 처리 + 인접건물 면이면 그 지점 일조시간 표시
   if (!pastTapSlop(e)) {
     const group = pickBuilding(e);
     selectBuilding(group ? (group.userData.buildingId as string) : null);
+    const surf = pickAdjSurface(e);
+    if (surf) showSunProbe(surf.building, surf.point, surf.normal);
+    else hideSunProbe();
   }
   downPos = null;
 });
+
+// ---------- 인접건물 지점 클릭 → 일조시간 ----------
+// 클릭한 벽·지붕 지점에서 기준일 연속(09~15시)·총(08~16시) 직달 일조시간을 바로 계산해 보여준다.
+// 차폐 BVH는 배치가 바뀔 때까지 재사용한다(invalidateAnalysis에서 폐기).
+
+let probeMeshes: { after: THREE.Mesh[]; before: THREE.Mesh[] } | null = null;
+let probeAnchor: THREE.Vector3 | null = null;
+const probeEl = document.createElement("div");
+probeEl.className = "sun-probe";
+probeEl.hidden = true;
+document.body.appendChild(probeEl);
+const probeMarker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.5, 16, 12),
+  new THREE.MeshBasicMaterial({ color: 0xf5a623, depthTest: false }),
+);
+probeMarker.renderOrder = 999;
+probeMarker.visible = false;
+viewer.scene.add(probeMarker);
+
+function disposeProbeMeshes(): void {
+  if (!probeMeshes) return;
+  disposeObstructionMeshes(probeMeshes.after);
+  disposeObstructionMeshes(probeMeshes.before);
+  probeMeshes = null;
+}
+
+function pickAdjSurface(
+  e: PointerEvent,
+): { building: Building; point: THREE.Vector3; normal: THREE.Vector3 } | null {
+  setPointerFromEvent(e);
+  raycaster.setFromCamera(pointer, viewer.camera);
+  for (const hit of raycaster.intersectObjects(viewer.buildingsRoot.children, true)) {
+    if (!(hit.object instanceof THREE.Mesh) || !hit.face) continue;
+    let obj: THREE.Object3D | null = hit.object;
+    while (obj && !obj.userData.buildingId) obj = obj.parent;
+    if (!obj) continue;
+    const b = project.buildings.find((bb) => bb.id === obj!.userData.buildingId);
+    if (!b || b.type !== "인접건물") return null; // 가장 가까운 건물이 인접건물이 아니면 측정 안 함
+    const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    // 수평 성분만 남겨 벽 법선을 정리 (지붕은 위쪽 그대로)
+    if (Math.abs(normal.y) < 0.5) normal.setY(0).normalize();
+    else normal.set(0, 1, 0);
+    return { building: b, point: hit.point.clone(), normal };
+  }
+  return null;
+}
+
+function showSunProbe(b: Building, point: THREE.Vector3, normal: THREE.Vector3): void {
+  syncAnalysisSettings();
+  syncSunHoursSettings();
+  if (!probeMeshes) {
+    probeMeshes = {
+      after: buildObstructionMeshes(project.buildings),
+      before: buildObstructionMeshes(project.buildings.filter((bb) => bb.type !== "계획주동")),
+    };
+  }
+  const samples = sunHoursSamples(project);
+  const step = project.analysis.sunHours.timeStep;
+  const now = pointSunHours(samples, step, point, normal, probeMeshes.after);
+  const pre = pointSunHours(samples, step, point, normal, probeMeshes.before);
+  const ok = (h: { continuous: number; total: number }) => h.continuous >= 2 - 1e-6 || h.total >= 4 - 1e-6;
+  const gl = b.terrainElevation ?? 0;
+  const isRoof = normal.y > 0.5;
+  const floor = Math.min(b.floors, Math.max(1, Math.floor((point.y - gl) / b.floorHeight) + 1));
+  const where = isRoof ? "지붕" : `${floor}층 부근 · 지면+${(point.y - gl).toFixed(1)}m`;
+  const changed = Math.abs(now.continuous - pre.continuous) > 1e-6 || Math.abs(now.total - pre.total) > 1e-6;
+  const use = b.use ? ` · ${FACILITY_USE_LABEL[b.use]}` : "";
+  probeEl.innerHTML =
+    `<button class="sun-probe-x" aria-label="닫기">✕</button>` +
+    `<div class="sp-title">${b.name}${use} · ${where}</div>` +
+    `<div class="sp-row"><span>연속 일조 (09~15시)</span><b>${now.continuous.toFixed(1)}시간</b></div>` +
+    `<div class="sp-row"><span>총 일조 (08~16시)</span><b>${now.total.toFixed(1)}시간</b></div>` +
+    `<div class="sp-verdict ${ok(now) ? "pass" : "fail"}">${ok(now) ? "기준 충족" : "기준 미달"} ` +
+    `<small>(연속 2h 또는 총 4h)</small></div>` +
+    (changed
+      ? `<div class="sp-pre">사업 전: 연속 ${pre.continuous.toFixed(1)}h · 총 ${pre.total.toFixed(1)}h</div>`
+      : `<div class="sp-pre">계획주동 영향 없음 (사업 전과 같음)</div>`) +
+    `<div class="sp-pre">기준일 ${project.analysis.date} · ${step}분 간격</div>`;
+  probeEl.querySelector(".sun-probe-x")!.addEventListener("click", hideSunProbe);
+  probeAnchor = point.clone();
+  probeMarker.position.copy(point);
+  probeMarker.visible = true;
+  probeEl.hidden = false;
+  positionSunProbe();
+}
+
+function hideSunProbe(): void {
+  probeAnchor = null;
+  probeMarker.visible = false;
+  probeEl.hidden = true;
+}
+
+/** 카메라가 움직여도 팝업이 측정 지점을 따라가게 매 프레임 위치를 맞춘다 */
+function positionSunProbe(): void {
+  if (!probeAnchor) return;
+  const v = probeAnchor.clone().project(viewer.camera);
+  const r = canvas.getBoundingClientRect();
+  const behind = v.z > 1;
+  probeEl.style.visibility = behind ? "hidden" : "visible";
+  probeEl.style.left = `${r.left + ((v.x + 1) / 2) * r.width + 12}px`;
+  probeEl.style.top = `${r.top + ((1 - v.y) / 2) * r.height - 12}px`;
+  requestAnimationFrame(positionSunProbe);
+}
 
 // ---------- 배치안 저장·비교 ----------
 
@@ -2447,6 +2604,8 @@ compareModal.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!compareModal.hidden) compareModal.hidden = true;
+  hideSunProbe();
+  if (!lockModal.hidden) lockModal.hidden = true; // 답하지 않으면 고정 상태 유지
   // 초기화 확인은 Esc를 "취소"로 — 실수로 진행되지 않게
   const reset = document.getElementById("reset-modal");
   if (reset && !reset.hidden) reset.hidden = true;
