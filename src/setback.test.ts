@@ -495,3 +495,51 @@ describe("인동거리 — 직각 방향으로 처음 만나는 동만", () => {
     expect(runSpacingCheck(mkProject([a, b])).checks).toHaveLength(0);
   });
 });
+
+describe("인동거리 — 측벽 판별(방향 기준)", () => {
+  it("측벽에 창 표시가 있어도 측벽끼리는 4m(마목) — 0.5H를 적용하지 않는다", () => {
+    const a = mkBuilding("계획주동", rect(0, 0, 20, 10), 15, 3);
+    const b = mkBuilding("계획주동", rect(25, 0, 45, 10), 15, 3); // 동서 이격 5m
+    a.windowSegments = [[a.footprint[1], a.footprint[2]]]; // a 동측(측벽)에 창 표시
+    b.windowSegments = [[b.footprint[3], b.footprint[0]]]; // b 서측(측벽)에 창 표시
+    const r = runSpacingCheck(mkProject([a, b]));
+    expect(r.checks[0].rule).toBe("측벽");
+    expect(r.checks[0].required).toBeCloseTo(4);
+    expect(r.checks[0].pass).toBe(true);
+  });
+
+  it("요철로 쪼개진 긴 전면은 측벽이 아니다 — 채광창이면 0.5H", () => {
+    // 20m 폭 판상형 북측면이 0.5m 꺾여 8m·12m 두 조각
+    const a = mkBuilding("계획주동", [
+      { x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 10 }, { x: 12, y: 10 },
+      { x: 12, y: 10.5 }, { x: 0, y: 10.5 },
+    ], 10, 3);
+    a.windowSegments = [[a.footprint[3], a.footprint[2]], [a.footprint[5], a.footprint[4]]];
+    const b = mkBuilding("계획주동", rect(0, 20, 20, 30), 10, 3);
+    b.windowSegments = [[b.footprint[0], b.footprint[1]]];
+    const r = runSpacingCheck(mkProject([a, b]));
+    expect(r.checks[0].rule).toBe("채광");
+    expect(r.checks[0].required).toBeCloseTo(15);
+  });
+
+  it("채광창 장벽이 상대 측벽을 마주보면 그 장벽 기준 0.5H(가목)", () => {
+    const a = mkBuilding("계획주동", rect(0, 0, 20, 10), 10, 3); // 북측 장벽에 창
+    a.windowSegments = [[a.footprint[2], a.footprint[3]]];
+    const b = mkBuilding("계획주동", rect(5, 20, 15, 40), 10, 3); // 남북으로 긴 동 — 남측이 측벽
+    b.windowSegments = [[b.footprint[1], b.footprint[2]]];
+    const r = runSpacingCheck(mkProject([a, b]));
+    expect(r.checks[0].rule).toBe("채광");
+    expect(r.checks[0].distance).toBeCloseTo(10);
+    expect(r.checks[0].pass).toBe(false); // 10 < 15
+  });
+
+  it("정사각형 탑상형은 창 표시 없는 벽을 측벽으로 본다", () => {
+    const a = mkBuilding("계획주동", rect(0, 0, 15, 15), 10, 3);
+    a.windowSegments = [[a.footprint[0], a.footprint[1]]]; // 남측만 창 — 동측은 측벽
+    const b = mkBuilding("계획주동", rect(20, 0, 35, 15), 10, 3);
+    b.windowSegments = [[b.footprint[0], b.footprint[1]]]; // 서측은 측벽
+    const r = runSpacingCheck(mkProject([a, b]));
+    expect(r.checks[0].rule).toBe("측벽");
+    expect(r.checks[0].required).toBeCloseTo(4);
+  });
+});

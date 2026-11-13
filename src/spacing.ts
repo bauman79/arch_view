@@ -19,7 +19,9 @@ import { edgeHasWindow } from "./windows";
  *     (시행령 하한 0.5배, 서울시 조례 0.8배)
  *   - 라목: 채광창 없는 벽면 ↔ 측벽 → 8m 이상 (창없는 벽면끼리도 보수적으로 이 값 적용)
  *   - 마목: 측벽 ↔ 측벽 → 4m 이상
- *   측벽 판별은 기하 근사 — 벽 길이가 그 건물 최장 벽의 절반 이하이면 측벽으로 간주.
+ *   측벽 = 동의 최소 외접 사각형 단변과 나란한 벽(장축과 60° 넘게 꺾인 벽). 측벽에 창 표시가
+ *   있어도 채광창 벽면(가목)으로 보지 않는다 — 측벽은 라·마목(8m·4m)만 적용.
+ *   정사각형에 가까운 탑상형(장/단변 < 1.3)은 장축이 없으므로 창 표시 없는 벽을 측벽으로 본다.
  *   나목(남측 저층·개구부 방향 특례)·다목(부대·복리시설)은 미반영(문서화된 한계).
  *
  * PLAN_WIN 창면 데이터가 없는 동(windowSegments 비어있음)은 하위호환으로 모든 벽을
@@ -126,7 +128,26 @@ function mkEntry(b: Building): PlanEntry {
         : edgeHasWindow(b.footprint[i], b.footprint[(i + 1) % n], b.windowSegments),
     );
   }
-  for (let i = 0; i < n; i++) edgeSide.push(lens[i] <= maxLen * 0.5 + 1e-9);
+  // 측벽 판별 — 최소 외접 사각형의 장축 방향으로 정한다. 길이로 정하면 요철이 많은 판상형의
+  // 전면이 짧은 벽 여러 개로 쪼개져 측벽으로 잘못 잡힌다.
+  const axis = principalAxis(fp);
+  for (let i = 0; i < n; i++) {
+    const ex = fp[(i + 1) % n].x - fp[i].x;
+    const ey = fp[(i + 1) % n].y - fp[i].y;
+    const len = lens[i];
+    let side: boolean;
+    if (axis && len > 1e-9) {
+      // 장축과 60° 넘게 꺾인(= 단축과 나란한) 벽이 측벽
+      side = Math.abs((ex * axis.x + ey * axis.y) / len) < 0.5;
+    } else {
+      // 정사각형에 가까운 탑상형 — 장·단변이 없으니 창 표시가 없는 벽을 측벽으로 본다
+      side = b.windowSegments.length > 0 ? !edgeWin[i] : false;
+    }
+    edgeSide.push(side);
+    // 측벽은 창이 있어도 채광창 벽면(가목)으로 보지 않는다 — 측벽은 라·마목만 적용
+    if (side) edgeWin[i] = false;
+  }
+  void maxLen;
   return {
     id: b.id,
     name: b.name,
@@ -138,6 +159,56 @@ function mkEntry(b: Building): PlanEntry {
     normals,
     lens,
   };
+}
+
+/** 정사각형 판정 기준 — 외접 사각형 장변/단변이 이보다 작으면 장축이 없다고 본다 */
+const SQUARE_ASPECT = 1.3;
+
+/** 볼록 껍질 */
+function convexHull(pts: Point2[]): Point2[] {
+  const p = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
+  if (p.length < 3) return p;
+  const cross = (o: Point2, a: Point2, b: Point2) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: Point2[] = [];
+  for (const q of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], q) <= 0) lower.pop();
+    lower.push(q);
+  }
+  const upper: Point2[] = [];
+  for (let i = p.length - 1; i >= 0; i--) {
+    const q = p[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], q) <= 0) upper.pop();
+    upper.push(q);
+  }
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
+
+/**
+ * 최소 면적 외접 사각형의 장축(단위벡터). 장변/단변 < SQUARE_ASPECT면 null(탑상형).
+ * 볼록 껍질 각 변 방향마다 사각형을 대 보고 넓이가 가장 작은 것을 고른다.
+ */
+export function principalAxis(fp: Point2[]): Point2 | null {
+  const h = convexHull(fp);
+  if (h.length < 3) return null;
+  let best: { area: number; ux: number; uy: number; w: number; d: number } | null = null;
+  for (let i = 0; i < h.length; i++) {
+    const a = h[i], b = h[(i + 1) % h.length];
+    const l = Math.hypot(b.x - a.x, b.y - a.y);
+    if (l < 1e-9) continue;
+    const ux = (b.x - a.x) / l, uy = (b.y - a.y) / l;
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    for (const q of h) {
+      const u = q.x * ux + q.y * uy, v = -q.x * uy + q.y * ux;
+      minU = Math.min(minU, u); maxU = Math.max(maxU, u);
+      minV = Math.min(minV, v); maxV = Math.max(maxV, v);
+    }
+    const w = maxU - minU, d = maxV - minV;
+    if (!best || w * d < best.area - 1e-9) best = { area: w * d, ux, uy, w, d };
+  }
+  if (!best) return null;
+  const long = Math.max(best.w, best.d), short = Math.min(best.w, best.d);
+  if (short < 1e-9 || long / short < SQUARE_ASPECT) return null;
+  return best.w >= best.d ? { x: best.ux, y: best.uy } : { x: -best.uy, y: best.ux };
 }
 
 /**
@@ -349,8 +420,11 @@ function ruleFor(
   const winSrc = src.edgeWin[i];
   const winTgt = tgt.edgeWin[j];
   const height = Math.max(src.height, tgt.height);
+  // 가목: 어느 한쪽이 채광창 있는 벽면(측벽 제외)이면 0.5H — 측벽에서는 비율 거리를 보지 않는다
   if (winSrc || winTgt) return { rule: "채광", required: height * ratioWindow };
+  // 마목: 측벽 ↔ 측벽 4m
   if (src.edgeSide[i] && tgt.edgeSide[j]) return { rule: "측벽", required: sideM };
+  // 라목: 채광창 없는 벽면 ↔ 측벽 8m (창 없는 장벽끼리도 보수적으로 8m)
   return { rule: "창없음", required: noWindowM };
 }
 

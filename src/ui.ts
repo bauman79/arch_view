@@ -987,7 +987,7 @@ function updateStatusChecks(
     const ok = pass === total;
     return (
       `<span class="sb-item ${ok ? "ok" : "bad"}"><i class="sb-dot"></i>` +
-      `${label} ${pass}/${total} ${ok ? "적합" : "위반"}</span>`
+      (ok ? `${label} ${total}건 모두 적합</span>` : `${label} 위반 ${total - pass} / ${total}건</span>`)
     );
   };
   el.innerHTML =
