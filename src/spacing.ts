@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { worldFootprint } from "./buildings";
-import { pointInPolygon } from "./geom2d";
-import { buildingHeight, type Building, type Point2, type Project } from "./types";
+import { pointInPolygon, raySegmentDistance } from "./geom2d";
+import { residentialHeight, type Building, type Point2, type Project } from "./types";
 import { edgeHasWindow } from "./windows";
 
 /**
@@ -9,7 +9,9 @@ import { edgeHasWindow } from "./windows";
  * 같은 대지의 계획주동 쌍마다 **서로 마주보는 벽면**을 찾아, 벽면 직각방향 이격거리를 판정한다.
  *
  * ⚠️ 법은 "벽면으로부터 직각방향" 거리 기준이므로, 두 벽면을 서로 직각방향으로 확장했을 때
- * 실제로 겹치는(마주보는) 경우에만 검토한다 — 대각선으로 어긋나 마주보지 않는 건물 쌍은
+ * 실제로 겹치는(마주보는) 경우에만 검토한다. 또 그 직각선이 **처음 만나는 동**하고만 본다 —
+ * 사이에 다른 동이 끼어 있으면 그 뒤의 동은 검토하지 않는다(가려진 구간 제외).
+ * 높이는 필로티를 뺀 주거층 높이(residentialHeight) — 대각선으로 어긋나 마주보지 않는 건물 쌍은
  * 검토 대상이 아니다(예전 구현이 폴리곤 최단거리로 대각선까지 판정하던 오류를 수정).
  *
  * 마주보는 벽면 쌍의 적용 기준:
@@ -29,8 +31,16 @@ import { edgeHasWindow } from "./windows";
 
 export type SpacingRule = "채광" | "창없음" | "측벽";
 
-/** 마주보는 구간으로 인정할 최소 겹침 길이 (m) */
-const MIN_OVERLAP = 0.1;
+/** 마주보는 구간으로 인정할 최소 겹침 길이 (m) — 모서리만 살짝 걸치는 경우는 마주봄이 아니다 */
+const MIN_OVERLAP = 1.0;
+/** 가림 판정 샘플 간격 (m) */
+const SAMPLE_STEP = 0.5;
+
+interface Edge { a: Point2; b: Point2; minX: number; minY: number; maxX: number; maxY: number; plan: number; edge: number }
+/** 후보 탐색용 광선 간격 (m) */
+const PROBE_STEP = 1.0;
+/** 후보 탐색 최대 거리 (m) — 이보다 먼 동은 인동거리 기준(최대 0.8×H)과 무관 */
+const PROBE_FAR = 200;
 
 export interface SpacingCheck {
   aId: string;
@@ -122,7 +132,7 @@ function mkEntry(b: Building): PlanEntry {
     name: b.name,
     building: b,
     fp,
-    height: buildingHeight(b),
+    height: residentialHeight(b), // 필로티 제외 주거층 높이
     edgeWin,
     edgeSide,
     normals,
@@ -139,6 +149,7 @@ function facingDistance(
   i: number,
   tgt: PlanEntry,
   j: number,
+  blockers: EdgeIndex,
 ): { distance: number; overlapLen: number; pSrc: Point2; pTgt: Point2 } | null {
   const na = src.normals[i];
   const nb = tgt.normals[j];
@@ -184,19 +195,145 @@ function facingDistance(
 
   const tLo = t1 + dt * uLo;
   const tHi = t1 + dt * uHi;
-  const overlapLen = Math.abs(tHi - tLo);
+  if (Math.abs(tHi - tLo) < MIN_OVERLAP) return null;
+
+  // 마주보는 구간을 따라 직각선을 쏘아, 이 벽(j)보다 먼저 다른 벽에 막히는 지점은 뺀다
+  const n = Math.min(400, Math.max(5, Math.ceil(Math.abs(tHi - tLo) / SAMPLE_STEP) + 1));
+  const inset = Math.min(1e-3, Math.abs(tHi - tLo) * 1e-3);
+  let visible = 0;
+  let best: { s: number; u: number } | null = null;
+  for (let k = 0; k < n; k++) {
+    const u = uLo + inset / Math.abs(dt) + ((uHi - uLo) - (2 * inset) / Math.abs(dt)) * (k / (n - 1));
+    const s = s1 + ds * u;
+    if (s < 0) continue;
+    const t = t1 + dt * u;
+    const o = { x: p1.x + dir.x * t, y: p1.y + dir.y * t };
+    if (blocked(o, na, s, blockers)) continue;
+    visible++;
+    if (!best || s < best.s) best = { s, u };
+  }
+  if (!best) return null;
+  const overlapLen = Math.abs(tHi - tLo) * (visible / n);
   if (overlapLen < MIN_OVERLAP) return null;
 
-  // s(u)는 선형 — 최소는 클리핑 구간 양 끝 중 하나
-  const sLo = s1 + ds * uLo;
-  const sHi = s1 + ds * uHi;
-  const uMin = sLo <= sHi ? uLo : uHi;
-  const sMin = Math.min(sLo, sHi);
-  if (sMin < 0) return null;
+  const pTgt = { x: q1.x + (q2.x - q1.x) * best.u, y: q1.y + (q2.y - q1.y) * best.u };
+  const pSrc = { x: pTgt.x - na.x * best.s, y: pTgt.y - na.y * best.s };
+  return { distance: best.s, overlapLen, pSrc, pTgt };
+}
 
-  const pTgt = { x: q1.x + (q2.x - q1.x) * uMin, y: q1.y + (q2.y - q1.y) * uMin };
-  const pSrc = { x: pTgt.x - na.x * sMin, y: pTgt.y - na.y * sMin };
-  return { distance: sMin, overlapLen, pSrc, pTgt };
+const INDEX_CELL = 8;
+
+/** 벽 선분 격자 색인 — 가림 판정 때 근처 벽만 검사한다 (드래그 중 매 프레임 호출) */
+class EdgeIndex {
+  private cells = new Map<number, Edge[]>();
+  private key(cx: number, cy: number): number { return (cx + 50000) * 100000 + (cy + 50000); }
+  constructor(edges: Edge[]) {
+    for (const e of edges) {
+      for (let cx = Math.floor(e.minX / INDEX_CELL); cx <= Math.floor(e.maxX / INDEX_CELL); cx++) {
+        for (let cy = Math.floor(e.minY / INDEX_CELL); cy <= Math.floor(e.maxY / INDEX_CELL); cy++) {
+          const k = this.key(cx, cy);
+          const l = this.cells.get(k);
+          if (l) l.push(e); else this.cells.set(k, [e]);
+        }
+      }
+    }
+  }
+  cell(cx: number, cy: number): Edge[] | undefined { return this.cells.get(this.key(cx, cy)); }
+  /** 사각형 범위에 걸친 벽들 (중복 가능) */
+  query(minX: number, minY: number, maxX: number, maxY: number, out: Set<Edge>): void {
+    out.clear();
+    for (let cx = Math.floor(minX / INDEX_CELL); cx <= Math.floor(maxX / INDEX_CELL); cx++) {
+      for (let cy = Math.floor(minY / INDEX_CELL); cy <= Math.floor(maxY / INDEX_CELL); cy++) {
+        const l = this.cells.get(this.key(cx, cy));
+        if (l) for (const e of l) out.add(e);
+      }
+    }
+  }
+}
+
+const queryBuf = new Set<Edge>();
+
+/** o에서 dir로 거리 s 안에 다른 벽(어느 계획주동이든)이 있으면 가려진 것 */
+function blocked(o: Point2, dir: Point2, s: number, index: EdgeIndex): boolean {
+  const ex = o.x + dir.x * s, ey = o.y + dir.y * s;
+  const minX = Math.min(o.x, ex) - 1e-6, maxX = Math.max(o.x, ex) + 1e-6;
+  const minY = Math.min(o.y, ey) - 1e-6, maxY = Math.max(o.y, ey) + 1e-6;
+  const lim = s - Math.max(1e-6, s * 1e-6);
+  index.query(minX, minY, maxX, maxY, queryBuf);
+  for (const e of queryBuf) {
+    if (e.maxX < minX || e.minX > maxX || e.maxY < minY || e.minY > maxY) continue;
+    const d = raySegmentDistance(o, dir, e.a, e.b);
+    if (d !== null && d > 1e-6 && d < lim) return true;
+  }
+  return false;
+}
+
+function edgesOf(plans: PlanEntry[]): Edge[] {
+  const out: Edge[] = [];
+  plans.forEach((p, pi) => {
+    for (let i = 0; i < p.fp.length; i++) {
+      const a = p.fp[i], b = p.fp[(i + 1) % p.fp.length];
+      out.push({ a, b, minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y), maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y), plan: pi, edge: i });
+    }
+  });
+  return out;
+}
+
+/** 격자를 따라가며(DDA) 광선이 처음 만나는 벽 */
+function firstHit(o: Point2, dir: Point2, index: EdgeIndex, maxD: number): { e: Edge; d: number } | null {
+  let cx = Math.floor(o.x / INDEX_CELL), cy = Math.floor(o.y / INDEX_CELL);
+  const stepX = dir.x > 0 ? 1 : -1, stepY = dir.y > 0 ? 1 : -1;
+  const tDeltaX = Math.abs(dir.x) < 1e-12 ? Infinity : INDEX_CELL / Math.abs(dir.x);
+  const tDeltaY = Math.abs(dir.y) < 1e-12 ? Infinity : INDEX_CELL / Math.abs(dir.y);
+  const nextX = (cx + (stepX > 0 ? 1 : 0)) * INDEX_CELL, nextY = (cy + (stepY > 0 ? 1 : 0)) * INDEX_CELL;
+  let tMaxX = Math.abs(dir.x) < 1e-12 ? Infinity : (nextX - o.x) / dir.x;
+  let tMaxY = Math.abs(dir.y) < 1e-12 ? Infinity : (nextY - o.y) / dir.y;
+  let best: { e: Edge; d: number } | null = null;
+  let tCell = 0;
+  while (tCell <= maxD) {
+    const list = index.cell(cx, cy);
+    if (list) {
+      for (const e of list) {
+        const d = raySegmentDistance(o, dir, e.a, e.b);
+        if (d !== null && d > 1e-6 && (!best || d < best.d)) best = { e, d };
+      }
+    }
+    const tExit = Math.min(tMaxX, tMaxY);
+    if (best && best.d <= tExit) return best;
+    tCell = tExit;
+    if (tMaxX < tMaxY) { cx += stepX; tMaxX += tDeltaX; } else { cy += stepY; tMaxY += tDeltaY; }
+  }
+  return best && best.d <= maxD ? best : null;
+}
+
+/** 각 벽에서 직각으로 광선을 쏘아 처음 닿는 (다른 동의) 벽 — 실제로 검토할 벽면 쌍 후보 */
+function facingCandidates(plans: PlanEntry[], index: EdgeIndex): Map<number, [number, number, number, number][]> {
+  /** 키 = 작은 동 번호 × 10000 + 큰 동 번호 → [원천 동, 원천 벽, 대상 동, 대상 벽] */
+  const out = new Map<number, [number, number, number, number][]>();
+  const seen = new Set<string>();
+  plans.forEach((p, pi) => {
+    for (let i = 0; i < p.fp.length; i++) {
+      const len = p.lens[i];
+      if (len < MIN_OVERLAP) continue;
+      const a = p.fp[i], b = p.fp[(i + 1) % p.fp.length];
+      const n = p.normals[i];
+      const k = Math.max(1, Math.round(len / PROBE_STEP));
+      for (let s = 0; s < k; s++) {
+        const t = (s + 0.5) / k;
+        const o = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+        const h = firstHit(o, n, index, PROBE_FAR);
+        if (!h || h.e.plan === pi) continue;
+        const key = `${pi}:${i}>${h.e.plan}:${h.e.edge}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const pk = Math.min(pi, h.e.plan) * 10000 + Math.max(pi, h.e.plan);
+        const l = out.get(pk);
+        const item: [number, number, number, number] = [pi, i, h.e.plan, h.e.edge];
+        if (l) l.push(item); else out.set(pk, [item]);
+      }
+    }
+  });
+  return out;
 }
 
 /** 벽면 쌍의 적용 기준과 요구 이격거리 */
@@ -229,6 +366,8 @@ export function runSpacingCheck(project: Project): SpacingResult {
     .filter((b) => b.type === "계획주동")
     .map(mkEntry)
     .filter((p) => p.fp.length >= 3);
+  const blockers = new EdgeIndex(edgesOf(plans));
+  const candidates = facingCandidates(plans, blockers);
 
   const checks: SpacingCheck[] = [];
   for (let ai = 0; ai < plans.length; ai++) {
@@ -266,9 +405,12 @@ export function runSpacingCheck(project: Project): SpacingResult {
         tgt: PlanEntry,
         srcIsA: boolean,
       ) => {
-        for (let i = 0; i < src.fp.length; i++) {
-          for (let j = 0; j < tgt.fp.length; j++) {
-            const f = facingDistance(src, i, tgt, j);
+        const si = srcIsA ? ai : bi;
+        // 직각 광선이 실제로 닿은 벽면 쌍만 정밀 판정 (943벽 전수 대조는 드래그 중 너무 느리다)
+        for (const [cs, i, , j] of candidates.get(ai * 10000 + bi) ?? []) {
+          if (cs !== si) continue;
+          {
+            const f = facingDistance(src, i, tgt, j, blockers);
             if (!f) continue;
             const { rule, required } = ruleFor(
               src,
@@ -350,6 +492,9 @@ export function createSpacingOverlay(
   const up = new THREE.Vector3(0, 1, 0);
   const yAt = (x: number, y: number) => (elevate ? elevate(x, y) : 0) + LINE_Y;
   for (const c of result.checks) {
+    // 기준의 2배 넘게 떨어진 적합 쌍은 그리지 않는다 — 회전된 동의 직각선이 단지 건너편까지
+    // 길게 뻗어 화면을 덮는 것을 막는다(판정·개수에는 그대로 포함)
+    if (c.pass && c.distance > Math.max(c.required * 2, 1)) continue;
     const mat = c.pass ? passMat : failMat;
     const radius = c.pass ? 0.3 : 0.5;
     const a = new THREE.Vector3(c.pa.x, yAt(c.pa.x, c.pa.y), -c.pa.y); // DXF y+ → three -z

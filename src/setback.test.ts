@@ -439,3 +439,59 @@ describe("인동거리 — 벽면 종류별 기준 (가·라·마목)", () => {
     expect(r.checks[0].pass).toBe(false); // 9m < 10m
   });
 });
+
+// ---------- 필로티 제외 높이 · 처음 만나는 동만 · 모서리 걸침 ----------
+
+describe("공동주택 높이 — 필로티 제외", () => {
+  it("채광사선: 15층(1층 필로티) × 3m → H = 14층 × 3m = 42m", () => {
+    const plan = mkBuilding("계획주동", rect(0, 0, 10, 10), 15, 3);
+    plan.pilotiFloors = 1;
+    plan.windowSegments = [[plan.footprint[2], plan.footprint[3]]];
+    const p = mkProject([plan]);
+    p.siteOverlays = [{ layer: "ADJ_BOUNDARY", points: [{ x: -5, y: 31 }, { x: 15, y: 31 }], closed: false }];
+    const r = runDaylightCheck(p);
+    expect(r.checks[0].height).toBeCloseTo(42);
+    expect(r.checks[0].ratio).toBeCloseTo(2); // D=21 → 42/21 = 2.0 → 적합(필로티 포함 45m면 위반)
+    expect(r.violations).toBe(0);
+  });
+
+  it("인동거리: 필로티 층을 뺀 높이로 기준거리를 정한다", () => {
+    const a = mkBuilding("계획주동", rect(0, 0, 20, 10), 15, 3);
+    a.pilotiFloors = 1; // 주거 14층 = 42m → 기준 21m
+    const b = mkBuilding("계획주동", rect(0, 31, 20, 41), 10, 3); // 이격 21m
+    const r = runSpacingCheck(mkProject([a, b]));
+    expect(r.checks[0].height).toBeCloseTo(42);
+    expect(r.checks[0].required).toBeCloseTo(21);
+    expect(r.checks[0].pass).toBe(true);
+  });
+});
+
+describe("인동거리 — 직각 방향으로 처음 만나는 동만", () => {
+  it("사이에 다른 동이 끼면 뒤의 동은 검토하지 않는다", () => {
+    const a = mkBuilding("계획주동", rect(0, 0, 20, 10), 10, 3);
+    const c = mkBuilding("계획주동", rect(0, 30, 20, 40), 10, 3); // 가운데
+    const b = mkBuilding("계획주동", rect(0, 60, 20, 70), 10, 3); // 뒤
+    const r = runSpacingCheck(mkProject([a, c, b]));
+    const pairs = r.checks.map((k) => [k.aId, k.bId].sort().join("|"));
+    expect(pairs).toHaveLength(2);
+    expect(pairs).not.toContain([a.id, b.id].sort().join("|"));
+  });
+
+  it("일부만 가려지면 보이는 구간으로만 판정한다", () => {
+    const a = mkBuilding("계획주동", rect(0, 0, 20, 10), 10, 3);
+    const c = mkBuilding("계획주동", rect(0, 20, 10, 25), 10, 3); // 왼쪽 절반만 가림
+    const b = mkBuilding("계획주동", rect(0, 40, 20, 50), 10, 3);
+    const r = runSpacingCheck(mkProject([a, c, b]));
+    const ab = r.checks.find((k) => [k.aId, k.bId].sort().join("|") === [a.id, b.id].sort().join("|"));
+    expect(ab).toBeDefined();
+    expect(ab!.overlapLen).toBeGreaterThan(8);
+    expect(ab!.overlapLen).toBeLessThan(11);
+    expect(ab!.pa.x).toBeGreaterThanOrEqual(10 - 1e-6); // 보이는 오른쪽 구간에서 잼
+  });
+
+  it("모서리만 1m 미만 걸치는 배치는 마주봄이 아니다", () => {
+    const a = mkBuilding("계획주동", rect(0, 0, 20, 10), 10, 3);
+    const b = mkBuilding("계획주동", rect(19.5, 15, 39.5, 25), 10, 3); // x 겹침 0.5m
+    expect(runSpacingCheck(mkProject([a, b])).checks).toHaveLength(0);
+  });
+});

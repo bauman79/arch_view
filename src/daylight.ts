@@ -1,14 +1,15 @@
 import * as THREE from "three";
 import { worldFootprint } from "./buildings";
 import { raySegmentDistance, signedArea } from "./geom2d";
-import { buildingHeight, type OverlayLayer, type Point2, type Project } from "./types";
+import { residentialHeight, type OverlayLayer, type Point2, type Project } from "./types";
 import { edgeHasWindow } from "./windows";
 
 /**
  * 채광사선 검토 — 건축법 시행령 제86조, 주택건설기준 등에 관한 규정 제10조.
  * ⚠️ 검토 대상은 **계획주동(PLAN_BLDG)의 창이 있는 벽면**이다 — 인접건물(ADJ_BLDG)은
  * 채광사선 검토 대상이 아니다(예전 구현의 오류였음). 창면에서 벽면 **직각 방향**으로
- * 다음 기준선까지의 수평거리 D를 재고, 그 벽면이 속한 주동의 높이 H와 비교한다:
+ * 다음 기준선까지의 수평거리 D를 재고, 그 벽면이 속한 주동의 높이 H와 비교한다
+ * (H = 주거로 쓰는 층부터의 높이 — 필로티 층은 제외):
  *   - 도로(ROAD_CL)·공원(PARK_BOUNDARY) 중심선과 만나면: H/D ≤ daylightRoadParkRatio(완화, 기본 2.0)
  *   - 인접대지경계선(ADJ_BOUNDARY)과 만나면: H/D ≤ daylightRatio(기본 4.0)
  * 여러 기준선이 그 방향에 있으면 **가장 가까운 것**을 기준으로 삼는다(그 기준선의 배율 적용).
@@ -101,7 +102,8 @@ export function runDaylightCheck(project: Project): DaylightResult {
     const fp = worldFootprint(b);
     if (fp.length < 3) continue;
     const windingSign = signedArea(fp) >= 0 ? 1 : -1;
-    const height = buildingHeight(b);
+    // 공동주택 — 필로티를 뺀 주거층 높이로 H를 잡는다
+    const height = residentialHeight(b);
 
     for (let i = 0; i < fp.length; i++) {
       const p1 = fp[i];

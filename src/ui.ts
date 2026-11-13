@@ -24,7 +24,7 @@ import {
   type FacilityPointStatus,
   type FacilityResult,
 } from "./facility";
-import { buildingHeight, FACILITY_USE_LABEL, mirrorLabel, type Building, type FacilityUse } from "./types";
+import { buildingHeight, FACILITY_USE_LABEL, residentialHeight, mirrorLabel, type Building, type FacilityUse } from "./types";
 import {
   formatSavedAt,
   maxOf,
@@ -543,6 +543,7 @@ function fillAccordionBody(
       pilotiInput.addEventListener("change", () => {
         b.pilotiFloors = clampNum(pilotiInput, 0, Math.max(0, b.floors - 1));
         pilotiInput.value = String(b.pilotiFloors);
+        heightInfo.textContent = heightText(b);
         refreshUnitInfo(b);
         cb.onParamsChange(b);
       });
@@ -791,7 +792,12 @@ function heightText(b: Building): string {
       : "";
   const rotated =
     Math.abs(off.rotation) > 0.01 ? ` · 회전 ${off.rotation.toFixed(0)}°` : "";
-  return `높이 ${buildingHeight(b).toFixed(1)}m${moved}${rotated}`;
+  // 필로티가 있는 계획주동은 채광·인동에 쓰는 주거층 높이를 함께 보여준다
+  const resid =
+    b.type === "계획주동" && b.pilotiFloors > 0
+      ? ` (채광·인동 ${residentialHeight(b).toFixed(1)}m, 필로티 제외)`
+      : "";
+  return `높이 ${buildingHeight(b).toFixed(1)}m${resid}${moved}${rotated}`;
 }
 
 /** 미러 버튼 클릭 후 카드의 미러 상태 표시만 갱신 */

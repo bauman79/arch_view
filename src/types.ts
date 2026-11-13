@@ -239,6 +239,16 @@ export function buildingHeight(b: Building): number {
   return b.floors * b.floorHeight;
 }
 
+/**
+ * 공동주택 채광사선·인동거리용 높이 — 주거로 쓰는 층부터 위로만 센다.
+ * 필로티(주거 아님) 층고는 빼므로 15층(1층 필로티) 동은 14개 층 높이가 된다.
+ * 정북사선·그림자·일조는 실제 매스 높이(buildingHeight)를 그대로 쓴다.
+ */
+export function residentialHeight(b: Building): number {
+  const piloti = Math.min(Math.max(0, b.pilotiFloors), b.floors);
+  return Math.max(0, b.floors - piloti) * b.floorHeight;
+}
+
 /** 미러 상태 표기 — 엑셀 배치개요 "미러" 컬럼, 건물 카드 표시에 공용 */
 export function mirrorLabel(b: Building): string {
   if (b.mirroredH && b.mirroredV) return "수평+수직";
