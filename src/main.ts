@@ -3305,6 +3305,91 @@ registerAnalysis(createNoiseModule(analysisCtx));
 registerAnalysis(createSkyViewModule(analysisCtx));
 registerAnalysis(createPrivacyModule(analysisCtx));
 registerAnalysis(createSkylineModule(analysisCtx));
+setupPanelTabs();
+
+// ---------- 왼쪽 패널 탭 + 탭 전체 실행 ----------
+function setupPanelTabs(): void {
+  const wrap = document.querySelector<HTMLElement>("#left-panel .lp-acc-wrap");
+  if (!wrap) return;
+  type Tab = "law" | "sun" | "env" | "set";
+  const TABS: [Tab, string][] = [["law", "법규"], ["sun", "일조"], ["env", "환경"], ["set", "설정·파일"]];
+  const byId: Record<string, Tab> = {
+    "sunhoursmap-section": "sun", "unitsun-section": "sun", "shadowplan-section": "sun",
+    "wind-section": "env", "shadewalk-section": "env", "thermal-section": "env", "noise-section": "env",
+    "skyview-section": "env", "privacy-section": "env", "skyline-section": "env",
+    "terrain-section": "set", "schemes-section": "set",
+  };
+  const byTitle: [string, Tab][] = [["기본 설정", "set"], ["정북", "law"], ["일조권", "sun"], ["유치원", "sun"]];
+  const sections = [...wrap.querySelectorAll<HTMLDetailsElement>("details.lp-acc")];
+  for (const d of sections) {
+    const title = d.querySelector("summary")?.textContent ?? "";
+    d.dataset.tab = byId[d.id] ?? byTitle.find(([t]) => title.startsWith(t))?.[1] ?? "set";
+  }
+  // 탭별 실행 버튼 (오래 걸리는 LBM·입면 창은 제외)
+  const RUN: Record<Tab, string[]> = {
+    law: [],
+    sun: ["run-sunhours", "run-facility", "run-unitsun", "run-shadowplan", "run-sunhoursmap"],
+    env: ["run-wind", "run-shadewalk", "run-thermal", "run-noise", "run-skyview", "run-privacy"],
+    set: [],
+  };
+  const bar = document.createElement("div");
+  bar.className = "lp-tabs";
+  const runRow = document.createElement("div");
+  runRow.className = "row lp-tab-run";
+  const runBtn = document.createElement("button");
+  runBtn.className = "btn mini block";
+  runRow.append(runBtn);
+  let cur: Tab = "law";
+  try {
+    cur = (localStorage.getItem("lpTab") as Tab) || "law";
+  } catch {
+    /* 저장소 없음 */
+  }
+  const show = (t: Tab) => {
+    cur = t;
+    try {
+      localStorage.setItem("lpTab", t);
+    } catch {
+      /* 저장소 없음 */
+    }
+    for (const b of bar.querySelectorAll<HTMLButtonElement>("button")) b.classList.toggle("active", b.dataset.tab === t);
+    for (const d of sections) d.hidden = d.dataset.tab !== t;
+    runRow.hidden = RUN[t].length === 0;
+    runBtn.textContent = `이 탭 분석 모두 실행 (${RUN[t].length}개)`;
+  };
+  for (const [t, label] of TABS) {
+    const b = document.createElement("button");
+    b.dataset.tab = t;
+    b.textContent = label;
+    b.addEventListener("click", () => show(t));
+    bar.append(b);
+  }
+  runBtn.addEventListener("click", async () => {
+    if (project.buildings.length === 0) {
+      setStatus("먼저 DXF를 불러오세요.");
+      return;
+    }
+    runBtn.disabled = true;
+    const ids = RUN[cur];
+    const done: string[] = [];
+    try {
+      for (const id of ids) {
+        const b = document.getElementById(id) as HTMLButtonElement | null;
+        if (!b || b.disabled) continue;
+        b.click();
+        await new Promise((r) => setTimeout(r, 150));
+        // 실행 중에는 버튼이 비활성 — 끝날 때까지 기다린다 (최대 10분)
+        for (let i = 0; i < 3000 && b.disabled; i++) await new Promise((r) => setTimeout(r, 200));
+        done.push(b.closest("details")?.querySelector("summary")?.textContent ?? id);
+      }
+      setStatus(`탭 전체 실행 완료 — ${done.length}개 (${done.join(", ")}) · 오른쪽 결과판에서 확인하세요`);
+    } finally {
+      runBtn.disabled = false;
+    }
+  });
+  wrap.prepend(bar, runRow);
+  show(TABS.some(([t]) => t === cur) ? cur : "law");
+}
 
 // ---------- 시점 저장 · JPG 내보내기 ----------
 

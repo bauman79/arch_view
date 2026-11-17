@@ -1918,6 +1918,10 @@
       @media (max-width: 1280px) and (min-width: 1101px) { #left-panel { width: 256px; } }
       #left-panel .lp-heading { font-size: 13px; text-transform: none; letter-spacing: 0; color: #334155; }
       #left-panel .lp-acc-wrap { padding: 8px; }
+      #left-panel .lp-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 8px; position: sticky; top: 0; z-index: 2; background: inherit; padding-top: 2px; }
+      #left-panel .lp-tabs button { border: 1px solid #d5dce6; background: #fff; border-radius: 6px; padding: 6px 0; font-size: 13px; cursor: pointer; color: #475569; }
+      #left-panel .lp-tabs button.active { background: #1e293b; color: #fff; border-color: #1e293b; font-weight: 600; }
+      #left-panel .lp-tab-run { margin-bottom: 8px; }
       #left-panel details.lp-acc { margin-bottom: 6px; border: 1px solid #d5dce6; border-radius: 8px; background: #fff; }
       #left-panel details.lp-acc > summary {
         display: flex; align-items: center; justify-content: space-between;
