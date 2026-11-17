@@ -150,3 +150,34 @@ export async function findMaxFloors(
     fixedViolations: fixed.get(b.id) ?? 0,
   }));
 }
+
+/**
+ * 정해진 층수 배치를 법규에 맞게 다듬는다 — 동마다 (다른 동은 그대로 둔 채) 최소 층수에서 없던
+ * 위반이 생기면 한 층씩 내린다. 높은 동부터 2회. 바뀐 동의 새 층수를 돌려준다.
+ */
+export async function legalize(
+  project: Project,
+  ids: string[],
+  yieldFn: () => Promise<void> = () => Promise.resolve(),
+): Promise<Map<string, number>> {
+  const targets = project.buildings
+    .filter((b) => ids.includes(b.id) && b.type === "계획주동")
+    .sort((a, b) => b.floors - a.floors);
+  const plans = project.buildings.filter((b) => b.type === "계획주동");
+  const changed = new Map<string, number>();
+  for (let pass = 0; pass < 2; pass++) {
+    for (const b of targets) {
+      const nb = plans.filter((o) => o.id !== b.id);
+      const keep = b.floors;
+      const minF = Math.max(1, b.pilotiFloors + 1);
+      b.floors = minF;
+      const base = violations(project, b, nb);
+      b.floors = keep;
+      const bad = () => [...violations(project, b, nb).keys()].some((k) => !base.has(k));
+      while (b.floors > minF && bad()) b.floors--;
+      if (b.floors !== keep) changed.set(b.id, b.floors);
+      await yieldFn();
+    }
+  }
+  return changed;
+}

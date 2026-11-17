@@ -1157,6 +1157,10 @@
       .ft-table input { width: 60px; }
       .ft-table .up { color: #166534; font-weight: 600; }
       .ft-table .down { color: #b91c1c; font-weight: 600; }
+      .tent-grid { display: grid; grid-template-columns: 150px 1fr; gap: 4px 8px; font-size: 12px; align-items: center; margin: 6px 0; }
+      .tent-grid input[type=number] { width: 100px; }
+      .tent-bar { display: inline-block; height: 8px; background: #e0a030; border-radius: 2px; vertical-align: middle; }
+      .tent-bar.cap { background: #e5484d; }
 
       /* 도면 진단표 */
       .diag-checks { list-style: none; padding: 0; margin: 6px 0; font-size: 13px; }
@@ -2423,6 +2427,24 @@
         <div id="mf-result" style="max-height:30vh;overflow:auto"></div>
         <div class="row">
           <button id="mf-apply" class="btn primary" hidden>찾은 층수 적용</button>
+        </div>
+        <h3 class="ft-h">신통기획 자동 배분 (텐트형 스카이라인)</h3>
+        <p class="hint">대지 가운데가 가장 높고 가장자리는 주변 건물 높이에 맞춰 낮아지도록, 목표 용적률·세대수를 채우는 가장 낮은 최고층을 찾습니다. 동마다 법규 최대 층수(정북·채광·인동)를 넘지 않습니다.</p>
+        <div class="tent-grid">
+          <label>목표</label>
+          <span><select id="tp-kind"><option value="far" selected>용적률(%)</option><option value="units">세대수</option></select>
+          <input type="number" id="tp-value" value="300" min="1" step="1" style="width:80px" /></span>
+          <label>근생 연면적(㎡)</label><input type="number" id="tp-retail" min="0" step="100" />
+          <label>부대복리(㎡/세대)</label><input type="number" id="tp-amenity" value="3" min="0" step="0.5" />
+          <label>최고·최저 층</label><span><input type="number" id="tp-max" value="35" min="1" max="99" style="width:60px" /> ~ <input type="number" id="tp-min" value="7" min="1" max="99" style="width:60px" /></span>
+          <label>가장자리 = 주변 층수 ×</label><span><input type="number" id="tp-edge" value="1.5" min="0.5" max="5" step="0.1" style="width:60px" /> (반경 <input type="number" id="tp-radius" value="100" min="20" max="500" step="10" style="width:60px" />m)</span>
+          <label>텐트 곡률</label><span><select id="tp-shape"><option value="0.6">완만(넓게 높음)</option><option value="1" selected>보통</option><option value="1.6">뾰족(가운데만)</option></select></span>
+          <label>세대당 바닥면적(㎡)</label><span><input type="number" id="tp-apu" value="110" min="30" max="300" step="5" style="width:70px" /> <span class="hint">평형 구성이 없는 동만</span></span>
+        </div>
+        <div class="row"><button id="tp-run" class="btn primary">자동 배분 계산</button></div>
+        <div id="tp-result" style="max-height:32vh;overflow:auto"></div>
+        <div class="row">
+          <button id="tp-apply" class="btn primary" hidden>배분 결과 적용</button>
           <button id="floors-close" class="btn">닫기</button>
         </div>
       </div>

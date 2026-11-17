@@ -129,7 +129,8 @@ import { renderResultBoard } from "./resultboard";
 import { buildReportHtml, type ReportFigure } from "./report";
 import { makeSurface, type DrapeSurface } from "./drape";
 import { diagnoseDxfText, diagnosisHtml } from "./dxfdiag";
-import { findMaxFloors, planTypeOf, type MaxFloorResult } from "./maxfloors";
+import { findMaxFloors, legalize, planTypeOf, type MaxFloorResult } from "./maxfloors";
+import { defaultTentOptions, planTent, tentMetrics, unitsPerFloorOf, type TentOptions, type TentResult } from "./tentplan";
 import { yieldToEventLoop } from "./pv";
 import { createUnitSunModule } from "./unitsun";
 import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
@@ -1010,8 +1011,16 @@ function renderFloorsTypes(): void {
   sel.innerHTML = rows.map(([t], i) => `<option value="${i}">${t === "전체" ? "전체 계획주동" : `${t} 타입`}</option>`).join("");
 }
 
+let tpPending: TentResult | null = null;
+let tpUpf: Map<string, number> | null = null;
+
 document.getElementById("floors-tool-btn")!.addEventListener("click", () => {
   renderFloorsTypes();
+  const retail = document.getElementById("tp-retail") as HTMLInputElement;
+  if (!retail.value) retail.value = String(defaultTentOptions(project.site.siteAreaM2).retailM2);
+  tpPending = null;
+  (document.getElementById("tp-result") as HTMLElement).innerHTML = "";
+  (document.getElementById("tp-apply") as HTMLElement).hidden = true;
   mfPending = null;
   (document.getElementById("mf-result") as HTMLElement).innerHTML = "";
   (document.getElementById("mf-apply") as HTMLElement).hidden = true;
@@ -1061,6 +1070,144 @@ document.getElementById("mf-run")!.addEventListener("click", async () => {
   } finally {
     runBtn.disabled = false;
   }
+});
+
+document.getElementById("tp-run")!.addEventListener("click", async () => {
+  const plans = project.buildings.filter((b) => b.type === "계획주동");
+  if (!plans.length) {
+    setStatus("장면에 계획주동이 없습니다.");
+    return;
+  }
+  const num = (id: string, d: number) => {
+    const v = parseFloat((document.getElementById(id) as HTMLInputElement).value);
+    return Number.isFinite(v) ? v : d;
+  };
+  const kind = (document.getElementById("tp-kind") as HTMLSelectElement).value as "far" | "units";
+  if (kind === "far" && !(project.site.siteAreaM2 > 0)) {
+    setStatus("용적률 목표에는 대지면적이 필요합니다 — 기본 설정에서 대지면적을 넣으세요.");
+    return;
+  }
+  const o: TentOptions = {
+    target: { kind, value: num("tp-value", 300) },
+    retailM2: Math.max(0, num("tp-retail", 0)),
+    amenityPerUnit: Math.max(0, num("tp-amenity", 3)),
+    maxFloors: Math.max(1, Math.round(num("tp-max", 35))),
+    minFloors: Math.max(1, Math.round(num("tp-min", 7))),
+    edgeFactor: num("tp-edge", 1.5),
+    edgeRadius: num("tp-radius", 100),
+    shape: num("tp-shape", 1),
+    areaPerUnit: num("tp-apu", 110),
+  };
+  if (o.minFloors > o.maxFloors) o.minFloors = o.maxFloors;
+  syncSetbackRules();
+  const out = document.getElementById("tp-result") as HTMLElement;
+  const runBtn = document.getElementById("tp-run") as HTMLButtonElement;
+  runBtn.disabled = true;
+  try {
+    // 1) 법규 최대 층수 (복제본에서)
+    const sim = { ...project, buildings: structuredClone(project.buildings) } as typeof project;
+    const legal = await findMaxFloors(
+      sim,
+      plans.map((b) => b.id),
+      o.maxFloors,
+      (d, t) => {
+        out.innerHTML = `<p class="hint">법규 최대 층수 찾는 중… ${Math.round((d / t) * 100)}%</p>`;
+      },
+      yieldToEventLoop,
+    );
+    // 2) 텐트형 배분 — 가장자리가 낮으면 가운데 동이 더 올라갈 여유가 생기므로,
+    //    법규로 잘린 동만 (주변은 배분 층수로 둔 채) 다시 최대 층수를 찾아 반복한다
+    const legalMap = new Map(legal.map((r) => [r.id, r.max]));
+    let res = planTent(project, legalMap, o);
+    for (let iter = 0; iter < 3; iter++) {
+      const capped = res.rows.filter((r) => r.capped).map((r) => r.id);
+      if (!capped.length) break;
+      const sim2 = { ...project, buildings: structuredClone(project.buildings) } as typeof project;
+      for (const r of res.rows) {
+        const b = sim2.buildings.find((x) => x.id === r.id);
+        if (b) b.floors = r.floors;
+      }
+      out.innerHTML = `<p class="hint">텐트형에 맞춰 가운데 동 여유 다시 찾는 중… (${iter + 1}/3)</p>`;
+      const again = await findMaxFloors(sim2, capped, o.maxFloors, undefined, yieldToEventLoop);
+      let raised = false;
+      for (const r of again) {
+        if (r.max > (legalMap.get(r.id) ?? 0)) {
+          legalMap.set(r.id, r.max);
+          raised = true;
+        }
+      }
+      if (!raised) break;
+      res = planTent(project, legalMap, o);
+    }
+    // 3) 최종 배치를 한 번 더 법규 검증 — 동시에 올린 동끼리 새로 걸리면 한 층씩 내림
+    const sim3 = { ...project, buildings: structuredClone(project.buildings) } as typeof project;
+    for (const r of res.rows) {
+      const b = sim3.buildings.find((x) => x.id === r.id);
+      if (b) b.floors = r.floors;
+    }
+    out.innerHTML = `<p class="hint">최종 배치 법규 검증 중…</p>`;
+    const fixed = await legalize(sim3, res.rows.map((r) => r.id), yieldToEventLoop);
+    if (fixed.size) {
+      for (const r of res.rows) {
+        const f = fixed.get(r.id);
+        if (f !== undefined) {
+          r.floors = f;
+          r.capped = true;
+        }
+      }
+      const m = tentMetrics(project, new Map(res.rows.map((r) => [r.id, r.floors])), o);
+      res = { ...res, ...m, peak: Math.max(...res.rows.map((r) => r.floors)) };
+    }
+    tpPending = res;
+    tpUpf = new Map(plans.map((b) => [b.id, unitsPerFloorOf(b, o.areaPerUnit)]));
+    const rows = [...res.rows].sort((a, b) => b.depth - a.depth);
+    const targetText = kind === "far" ? `용적률 ${o.target.value}%` : `${o.target.value.toLocaleString()}세대`;
+    out.innerHTML =
+      `<p class="${res.meets ? "" : "down"}" style="font-size:13px"><b>${res.meets ? "목표 충족" : "목표 미달"}</b> — ${targetText} 기준 · 최고 ${res.peak}층 · ` +
+      `세대 ${res.units.toLocaleString()} · 용적률 ${res.farPct === null ? "—" : res.farPct.toFixed(1) + "%"} ` +
+      `(주거 ${Math.round(res.residentialM2).toLocaleString()} + 근생 ${o.retailM2.toLocaleString()} + 부대 ${Math.round(res.amenityM2).toLocaleString()}㎡)` +
+      (res.meets ? "" : ` — 최고층 ${o.maxFloors}층과 법규 한도 안에서는 ${kind === "far" ? `${Math.abs(res.gap).toFixed(1)}%p` : `${Math.abs(Math.round(res.gap))}세대`} 부족합니다`) +
+      `</p><table class="ft-table"><tr><th>동</th><th>깊이</th><th>가장자리</th><th>텐트형</th><th>법규 최대</th><th>배분</th><th></th></tr>` +
+      rows
+        .map(
+          (r) =>
+            `<tr><td>${r.name}</td><td>${(r.depth * 100).toFixed(0)}%</td><td>${r.edgeFloors}층</td><td>${r.ideal}층</td><td>${r.legalMax}층</td>` +
+            `<td class="${r.capped ? "down" : ""}">${r.floors}층${r.capped ? " (법규)" : ""}</td>` +
+            `<td><span class="tent-bar${r.capped ? " cap" : ""}" style="width:${Math.round((r.floors / Math.max(1, res.peak)) * 80)}px"></span></td></tr>`,
+        )
+        .join("") +
+      `</table><p class="hint">깊이 = 대지 경계에서 얼마나 안쪽인가(100% = 가장 가운데). 빨간 막대는 법규 최대 층수로 잘린 동입니다. 연면적은 개략(바닥면적 × 주거층수)입니다.</p>`;
+    (document.getElementById("tp-apply") as HTMLElement).hidden = false;
+  } finally {
+    runBtn.disabled = false;
+  }
+});
+
+document.getElementById("tp-apply")!.addEventListener("click", () => {
+  if (!tpPending) return;
+  const changed: Building[] = [];
+  let estimated = 0;
+  for (const r of tpPending.rows) {
+    const b = project.buildings.find((x) => x.id === r.id);
+    if (!b) continue;
+    b.floors = r.floors;
+    // 평형 구성이 없는 동은 세대수 표에 잡히도록 추정 평형으로 층당 세대를 넣는다
+    if (b.unitMix.reduce((s, m) => s + m.countPerFloor, 0) <= 0 && tpUpf?.get(b.id)) {
+      b.unitMix = [{ unitType: "추정", countPerFloor: tpUpf.get(b.id)! }];
+      b.unitsPerFloor = tpUpf.get(b.id)!;
+      estimated++;
+    }
+    changed.push(b);
+  }
+  afterFloorsChanged(changed);
+  setStatus(
+    `신통기획 자동 배분 적용 — ${changed.length}동, 최고 ${tpPending.peak}층` +
+      (estimated ? ` · 평형 구성이 없던 ${estimated}동은 "추정" 평형으로 층당 세대를 넣었습니다` : "") +
+      ` (일조권은 따로 검토하세요)`,
+  );
+  tpPending = null;
+  (document.getElementById("tp-apply") as HTMLElement).hidden = true;
+  renderFloorsTypes();
 });
 
 document.getElementById("mf-apply")!.addEventListener("click", () => {
