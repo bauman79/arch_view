@@ -166,3 +166,17 @@ describe("법규 여유", async () => {
     expect(f(loose)).toBeGreaterThan(f(strict));
   });
 });
+
+describe("법규 무시 배분", async () => {
+  const { planTentRuleOnly } = await import("./tentplan");
+  it("법규와 무관하게 목표 용적률을 채우는 가장 낮은 텐트", () => {
+    const p = site();
+    const o = { ...defaultTentOptions(12000), northWeight: 0, tierStep: 0, slabRatio: 1, assumedAdjFloors: 0, target: { kind: "far" as const, value: 150 }, retailM2: 0, amenityPerUnit: 0, minFloors: 5, maxFloors: 40 };
+    const r = planTentRuleOnly(p, o);
+    expect(r.meets).toBe(true);
+    expect(r.farPct!).toBeGreaterThanOrEqual(150);
+    expect(r.rows.every((x) => !x.capped)).toBe(true);
+    const f = (id: string) => r.rows.find((x) => x.id === id)!.floors;
+    expect(f("P2")).toBeGreaterThan(f("P0"));
+  });
+});

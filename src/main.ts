@@ -130,7 +130,7 @@ import { buildReportHtml, type ReportFigure } from "./report";
 import { makeSurface, type DrapeSurface } from "./drape";
 import { diagnoseDxfText, diagnosisHtml } from "./dxfdiag";
 import { findMaxFloors, planTypeOf, violations, type MaxFloorResult } from "./maxfloors";
-import { defaultTentOptions, legalOptOf, planTentLegal, unitsPerFloorOf, type TentOptions, type TentResult } from "./tentplan";
+import { defaultTentOptions, legalOptOf, planTentLegal, planTentRuleOnly, unitsPerFloorOf, type TentOptions, type TentResult } from "./tentplan";
 import { yieldToEventLoop } from "./pv";
 import { createUnitSunModule } from "./unitsun";
 import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
@@ -1078,7 +1078,7 @@ document.getElementById("mf-run")!.addEventListener("click", async () => {
   }
 });
 
-document.getElementById("tp-run")!.addEventListener("click", async () => {
+async function runTentPlan(free: boolean): Promise<void> {
   const plans = project.buildings.filter((b) => b.type === "계획주동");
   if (!plans.length) {
     setStatus("장면에 계획주동이 없습니다.");
@@ -1120,14 +1120,16 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
   runBtn.disabled = true;
   try {
     // 규칙(텐트·남저북고·탑상/판상·단계) → 우선순위 법규 맞춤으로 목표를 채우는 가장 낮은 최고층
-    const res = await planTentLegal(
-      project,
-      o,
-      (msg) => {
-        out.innerHTML = `<p class="hint">${msg}…</p>`;
-      },
-      yieldToEventLoop,
-    );
+    const res = free
+      ? planTentRuleOnly(project, o)
+      : await planTentLegal(
+          project,
+          o,
+          (msg) => {
+            out.innerHTML = `<p class="hint">${msg}…</p>`;
+          },
+          yieldToEventLoop,
+        );
     // 법규로 낮아진 동 — 한 층 더 올리면 무엇에 걸리는지
     const reasons = new Map<string, number>();
     {
@@ -1137,7 +1139,7 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
         if (b) b.floors = r.floors;
       }
       const plansSim = sim.buildings.filter((b) => b.type === "계획주동");
-      for (const r of res.rows.filter((x) => x.capped)) {
+      for (const r of free ? [] : res.rows.filter((x) => x.capped)) {
         const b = sim.buildings.find((x) => x.id === r.id)!;
         const now = new Set(violations(sim, b, plansSim, legalOptOf(o)).keys());
         b.floors += 1;
@@ -1152,7 +1154,12 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
     tpUpf = new Map(plans.map((b) => [b.id, unitsPerFloorOf(b, o.areaPerUnit)]));
     // 목표 미달이면 원인 설명 — 법규 한도까지 모두 올렸을 때의 최대치와 걸리는 기준
     let why = "";
-    if (!res.meets) {
+    if (!res.meets && free) {
+      why =
+        `<div class="tp-why"><b>법규 무시 배분</b>으로도 최고 ${o.maxFloors}층 한도에서는 목표에 못 미칩니다 ` +
+        `(${kind === "far" ? `용적률 ${(res.farPct ?? 0).toFixed(1)}%` : `${res.units.toLocaleString()}세대`}). ` +
+        `최고층 한도를 올리거나 "낮은 동을 끌어올려 목표 우선"을 켜세요.</div>`;
+    } else if (!res.meets) {
       const unit = kind === "far" ? "%" : "세대";
       const bv = kind === "far" ? (res.farPct ?? 0).toFixed(1) : res.units.toLocaleString();
       why =
@@ -1185,11 +1192,28 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
         .join("") +
       `</table><p class="hint">높이 점수 = 가운데일수록·북쪽일수록 높음(100이 가장 높은 자리). 형태: 탑상형은 점수대로 높게, 탑에 붙은 날개·떨어진 판상형은 그 비율만큼 낮게. 빨간 막대는 법규 최대 층수로 잘린 동입니다. 연면적은 개략(바닥면적 × 주거층수)입니다.</p>`;
     out.insertAdjacentHTML("afterbegin", why);
+    if (free) {
+      const sim = { ...project, buildings: structuredClone(project.buildings) } as typeof project;
+      for (const r of res.rows) {
+        const bb = sim.buildings.find((x) => x.id === r.id);
+        if (bb) bb.floors = r.floors;
+      }
+      const n = runNorthSetbackCheck(sim).checks.filter((c) => !c.pass).length;
+      const d = new Set(runDaylightCheck(sim).checks.filter((c) => !c.pass).map((c) => c.buildingId)).size;
+      const sp = runSpacingCheck(sim).checks.filter((c) => !c.pass).length;
+      out.insertAdjacentHTML(
+        "afterbegin",
+        `<div class="tp-why" style="background:#eef2ff;border-color:#c7d2fe;color:#312e81"><b>법규 무시 배분</b> — 용적률·스카이라인 규칙만 반영했습니다. ` +
+          `이 배치를 적용하면 현재 기준으로 정북사선 ${n}동 · 채광사선 ${d}동 · 인동거리 ${sp}쌍이 위반입니다(검토용).</div>`,
+      );
+    }
     (document.getElementById("tp-apply") as HTMLElement).hidden = false;
   } finally {
     runBtn.disabled = false;
   }
-});
+}
+document.getElementById("tp-run")!.addEventListener("click", () => void runTentPlan(false));
+document.getElementById("tp-run-free")!.addEventListener("click", () => void runTentPlan(true));
 
 document.getElementById("tp-apply")!.addEventListener("click", () => {
   if (!tpPending) return;
@@ -3559,13 +3583,34 @@ function setupPanelTabs(): void {
     env: ["run-wind", "run-shadewalk", "run-thermal", "run-noise", "run-skyview", "run-privacy"],
     set: [],
   };
+  // 탭별 지우기 버튼 — 실행 목록 + LBM·입면처럼 따로 돌린 것까지
+  const CLEAR: Record<Tab, string[]> = {
+    law: [],
+    sun: ["clear-sunhours", "clear-facility", "clear-unitsun", "clear-shadowplan", "clear-sunhoursmap"],
+    env: ["clear-wind", "clear-lbm", "clear-shadewalk", "clear-thermal", "clear-noise", "clear-skyview", "clear-privacy", "clear-skyline"],
+    set: [],
+  };
   const bar = document.createElement("div");
   bar.className = "lp-tabs";
   const runRow = document.createElement("div");
   runRow.className = "row lp-tab-run";
   const runBtn = document.createElement("button");
-  runBtn.className = "btn mini block";
-  runRow.append(runBtn);
+  runBtn.className = "btn mini";
+  const clearBtn = document.createElement("button");
+  clearBtn.className = "btn mini";
+  clearBtn.textContent = "이 탭 결과 모두 지우기";
+  runRow.append(runBtn, clearBtn);
+  clearBtn.addEventListener("click", () => {
+    let n = 0;
+    for (const id of CLEAR[cur]) {
+      const b = document.getElementById(id) as HTMLButtonElement | null;
+      if (b && !b.disabled) {
+        b.click();
+        n++;
+      }
+    }
+    setStatus(`${TABS.find(([t]) => t === cur)?.[1]} 탭 분석 결과를 모두 지웠습니다 (${n}개 항목).`);
+  });
   let cur: Tab = "law";
   try {
     cur = (localStorage.getItem("lpTab") as Tab) || "law";
@@ -3583,6 +3628,7 @@ function setupPanelTabs(): void {
     for (const d of sections) d.hidden = d.dataset.tab !== t;
     runRow.hidden = RUN[t].length === 0;
     runBtn.textContent = `이 탭 분석 모두 실행 (${RUN[t].length}개)`;
+    clearBtn.hidden = CLEAR[t].length === 0;
   };
   for (const [t, label] of TABS) {
     const b = document.createElement("button");

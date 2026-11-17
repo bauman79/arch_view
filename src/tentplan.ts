@@ -533,3 +533,62 @@ export async function planTentLegal(
     relaxedLift,
   };
 }
+
+/**
+ * 법규 무시 배분 — 정북·채광·인동을 보지 않고 목표(용적률·세대수)와 스카이라인 규칙만으로.
+ * 최고층 한도로도 모자라면(완화 허용 시) 낮은 동을 끌어올린다.
+ */
+export function planTentRuleOnly(project: Project, o: TentOptions): TentLegalResult {
+  const rp = prepareRule(project, o);
+  const evalAt = (peak: number, lift: number) => {
+    const want = rp.floorsAt(peak, lift);
+    const m = tentMetrics(project, want, o);
+    return { want, m, metric: o.target.kind === "units" ? m.units : m.farPct ?? 0 };
+  };
+  let best = evalAt(o.maxFloors, 0);
+  let relaxedLift: number | null = null;
+  if (best.metric >= o.target.value) {
+    let lo = o.minFloors, hi = o.maxFloors;
+    while (hi - lo > 1) {
+      const mid = Math.round((lo + hi) / 2);
+      const r = evalAt(mid, 0);
+      if (r.metric >= o.target.value) {
+        hi = mid;
+        best = r;
+      } else lo = mid;
+    }
+  } else if (o.allowRelax) {
+    let lo = o.minFloors, hi = o.maxFloors;
+    const top = evalAt(o.maxFloors, hi);
+    best = top;
+    relaxedLift = hi;
+    if (top.metric >= o.target.value) {
+      while (hi - lo > 1) {
+        const mid = Math.round((lo + hi) / 2);
+        const r = evalAt(o.maxFloors, mid);
+        if (r.metric >= o.target.value) {
+          hi = mid;
+          best = r;
+          relaxedLift = mid;
+        } else lo = mid;
+      }
+    }
+  }
+  const rows: TentRow[] = rp.plans.map((b) => {
+    const mt = rp.meta.get(b.id)!;
+    const f = best.want.get(b.id)!;
+    return { id: b.id, name: b.name, depth: mt.depth, score: mt.score, role: mt.role, edgeFloors: mt.edge, ideal: f, legalMax: f, floors: f, capped: false };
+  });
+  return {
+    rows,
+    peak: Math.max(...rows.map((r) => r.floors)),
+    units: best.m.units,
+    residentialM2: best.m.residentialM2,
+    grossM2: best.m.grossM2,
+    farPct: best.m.farPct,
+    amenityM2: best.m.amenityM2,
+    meets: best.m.meets,
+    gap: best.m.gap,
+    relaxedLift,
+  };
+}
