@@ -63,7 +63,20 @@ export interface LbmDomain {
   /** 1=건물 내부 (row-major iy*nx+ix) */
   solid: Uint8Array;
   fluidCells: number;
+  /**
+   * 2.5D 보정 — 기준 높이보다 낮은 건물 셀은 막지 않고 스텝마다 속도를 이 비율만큼
+   * 줄인다(다공성 저항). 0이면 일반 유체. 없으면 모든 건물이 벽(순수 2D).
+   */
+  drag?: Float32Array;
+  /** 2.5D 기준 높이(m) — 이 높이 이상 건물만 벽. 0이면 순수 2D */
+  refHeightM?: number;
 }
+
+/**
+ * 2.5D 저층 건물 저항 계수 — 미터당 감쇠율 = LBM_POROUS_PER_M × (높이/기준높이).
+ * 기준높이의 절반인 건물 20m 폭을 지나면 보행 높이 풍속이 약 절반이 되도록 맞춘 값.
+ */
+export const LBM_POROUS_PER_M = 0.069;
 
 /** 로컬 좌표 → DXF */
 export function lbmLocalToDxf(domain: LbmDomain, lx: number, ly: number): Point2 {
@@ -83,6 +96,8 @@ interface FlowExtent {
   angle: number;
   /** 회전(흐름 정렬)된 footprint들 */
   footprints: Point2[][];
+  /** footprint별 건물 높이 (m) */
+  heights: number[];
   minX: number;
   minY: number;
   maxX: number;
@@ -101,6 +116,7 @@ function computeFlowExtent(
   const s = Math.sin(angle);
 
   const footprints: Point2[][] = [];
+  const heights: number[] = [];
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -110,6 +126,7 @@ function computeFlowExtent(
     if (fp.length < 3) continue;
     const rot = fp.map((p) => ({ x: c * p.x + s * p.y, y: -s * p.x + c * p.y }));
     footprints.push(rot);
+    heights.push(b.floors * b.floorHeight);
     for (const p of rot) {
       minX = Math.min(minX, p.x);
       minY = Math.min(minY, p.y);
@@ -132,6 +149,7 @@ function computeFlowExtent(
   return {
     angle,
     footprints,
+    heights,
     minX: minX - upstream,
     minY: minY - lateral,
     maxX: maxX + downstream,
@@ -169,25 +187,45 @@ export function buildLbmDomain(
   site: Site,
   windDirDeg: number,
   gridM: number,
+  refHeightM = 0,
 ): LbmDomain {
   const ext = computeFlowExtent(buildings, site, windDirDeg);
   const { nx, ny } = extentCells(ext, gridM);
   const solid = new Uint8Array(nx * ny);
+  const drag = refHeightM > 0 ? new Float32Array(nx * ny) : undefined;
   let fluidCells = nx * ny;
+  // footprint bbox — 셀마다 전 건물을 검사하지 않도록
+  const boxes = ext.footprints.map((fp) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of fp) {
+      x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
+      x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+    }
+    return { x0, y0, x1, y1 };
+  });
   for (let iy = 0; iy < ny; iy++) {
     const ly = ext.minY + iy * gridM;
     for (let ix = 0; ix < nx; ix++) {
       const lx = ext.minX + ix * gridM;
-      for (const fp of ext.footprints) {
-        if (pointInPolygon(lx, ly, fp)) {
-          solid[iy * nx + ix] = 1;
+      const cell = iy * nx + ix;
+      for (let k = 0; k < ext.footprints.length; k++) {
+        const bb = boxes[k];
+        if (lx < bb.x0 || lx > bb.x1 || ly < bb.y0 || ly > bb.y1) continue;
+        if (!pointInPolygon(lx, ly, ext.footprints[k])) continue;
+        const r = refHeightM > 0 ? ext.heights[k] / refHeightM : 1;
+        if (r >= 1) {
+          solid[cell] = 1;
           fluidCells--;
+          if (drag) drag[cell] = 0;
           break;
         }
+        // 저층 — 다공성 저항 (겹치면 큰 값)
+        const k1 = Math.min(0.5, LBM_POROUS_PER_M * r * gridM * LBM_U_LAT);
+        if (drag && k1 > drag[cell]) drag[cell] = k1;
       }
     }
   }
-  return { nx, ny, gridM, lx0: ext.minX, ly0: ext.minY, angle: ext.angle, solid, fluidCells };
+  return { nx, ny, gridM, lx0: ext.minX, ly0: ext.minY, angle: ext.angle, solid, fluidCells, drag, refHeightM };
 }
 
 // ---------- D2Q9 솔버 ----------
@@ -244,6 +282,7 @@ export class LbmSolver {
   /** 1 스텝 진행. 반환값: 최대 |Δ속도| / U_LAT */
   step(): number {
     const { nx, ny, solid } = this.domain;
+    const drag = this.domain.drag;
     const f = this.f;
     const fT = this.fTmp;
     const invTau = 1 / LBM_TAU;
@@ -269,10 +308,19 @@ export class LbmSolver {
         const ux = mx / rho;
         const uy = my / rho;
         const usq = 1.5 * (ux * ux + uy * uy);
+        // 2.5D 저층 건물 — 정확 차분(EDM) 힘: feq(감쇠된 u) − feq(u)를 더해 속도를 줄인다
+        const kd = drag ? drag[cell] : 0;
+        const dux = ux * (1 - kd);
+        const duy = uy * (1 - kd);
+        const dusq = 1.5 * (dux * dux + duy * duy);
         for (let d = 0; d < 9; d++) {
           const cu = 3 * (CX[d] * ux + CY[d] * uy);
           const feq = W[d] * rho * (1 + cu + 0.5 * cu * cu - usq);
-          const post = f[base + d] - (f[base + d] - feq) * invTau;
+          let post = f[base + d] - (f[base + d] - feq) * invTau;
+          if (kd > 0) {
+            const dcu = 3 * (CX[d] * dux + CY[d] * duy);
+            post += W[d] * rho * (1 + dcu + 0.5 * dcu * dcu - dusq) - feq;
+          }
           let tx = ix + CX[d];
           let ty = iy + CY[d];
           let dir = d;
@@ -393,13 +441,14 @@ export interface LbmMetrics {
 }
 
 export function computeLbmMetrics(domain: LbmDomain, ratio: Float32Array): LbmMetrics {
-  const { nx, ny, solid, gridM } = domain;
+  const { nx, ny, solid, gridM, drag } = domain;
   let maxRatio = 0;
   let sum = 0;
   let fluid = 0;
   let shadowCells = 0;
   for (let i = 0; i < nx * ny; i++) {
-    if (solid[i]) continue;
+    // 건물 내부(벽·저층 다공성 셀)는 지표에서 뺀다 — 외부 공간만
+    if (solid[i] || (drag && drag[i] > 0)) continue;
     const r = ratio[i];
     fluid++;
     sum += r;
@@ -565,7 +614,10 @@ export function assembleLbmResult(
     ratio[i] = Math.hypot(ux[i], uy[i]) / LBM_U_LAT;
   }
   const metrics = computeLbmMetrics(domain, ratio);
-  const field = lbmToWindField(domain, ux, uy, buildings);
+  // 2.5D면 기준 높이 이상 건물만 유선을 막는다 (저층은 유선이 통과)
+  const ref = domain.refHeightM ?? 0;
+  const walls = ref > 0 ? buildings.filter((b) => b.floors * b.floorHeight >= ref) : buildings;
+  const field = lbmToWindField(domain, ux, uy, walls);
   const streamlines = traceStreamlines(field, seedCount);
   return {
     windDirDeg: params.windDirDeg,

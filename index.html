@@ -2149,6 +2149,10 @@
                 </select>
               </div>
               <div class="row">
+                <label for="wind-ref-height" title="이 높이 이상 건물만 바람을 완전히 막고, 낮은 건물은 높이에 비례해 바람을 줄이며 통과시킵니다. 0이면 모든 건물을 벽으로 보는 순수 2D.">높이 반영(2.5D) 기준(m)</label>
+                <input type="number" id="wind-ref-height" value="20" min="0" max="200" step="5" />
+              </div>
+              <div class="row">
                 <button id="run-wind" class="btn primary">간이 분석</button>
                 <button id="clear-wind" class="btn mini">지우기</button>
               </div>

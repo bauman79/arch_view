@@ -123,6 +123,7 @@ import {
 } from "./analyses";
 import { renderResultBoard } from "./resultboard";
 import { createUnitSunModule } from "./unitsun";
+import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
 import { createShadowPlanModule } from "./shadowplan";
 import {
   drawLegendsOnCanvas,
@@ -1353,6 +1354,7 @@ for (const { file, label } of EPW_FILES) {
   windEpwSelect.appendChild(opt);
 }
 const windMonthSelect = document.getElementById("wind-month") as HTMLSelectElement;
+const windRefHeightInput = document.getElementById("wind-ref-height") as HTMLInputElement;
 const runWindBtn = document.getElementById("run-wind") as HTMLButtonElement;
 
 /** 파일별 풍향통계 캐시 — M5 EPW 캐시(일사 전용)와 별개로 원문에서 풍향·풍속만 뽑는다 */
@@ -1387,24 +1389,40 @@ runWindBtn.addEventListener("click", async () => {
     if (stats.hours === 0) throw new Error("선택한 기간에 유효한 풍향 데이터가 없습니다");
 
     clearWindOverlay();
-    const field = computeWindField(
-      project.buildings,
-      project.site,
-      stats.prevailingDirDeg,
-      WIND_GRID_M,
-    );
-    const streamlines = traceStreamlines(field, WIND_SEED_COUNT);
+    setStatus("바람길 계산 중… (백그라운드)");
+    const refH = Math.max(0, parseFloat(windRefHeightInput.value) || 0);
+    const done = await new Promise<WindDoneMessage>((resolve, reject) => {
+      const w = new Worker(new URL("./wind.worker.ts", import.meta.url), { type: "module" });
+      w.onmessage = (ev: MessageEvent<WindDoneMessage>) => {
+        w.terminate();
+        resolve(ev.data);
+      };
+      w.onerror = (e) => {
+        w.terminate();
+        reject(new Error(e.message));
+      };
+      w.postMessage({
+        buildings: project.buildings,
+        site: project.site,
+        windDirDeg: stats.prevailingDirDeg,
+        gridM: WIND_GRID_M,
+        refHeightM: refH,
+        lineCount: WIND_SEED_COUNT,
+      } satisfies WindRunMessage);
+    });
     lastWind = {
       windDir: stats.prevailingDirDeg,
       windSpeedMs: stats.meanSpeedMs,
       month,
-      streamlines,
-      shadowAreaM2: field.shadowAreaM2,
+      streamlines: done.streamlines,
+      shadowAreaM2: done.shadowAreaM2,
     };
     windGroup = createWindOverlay(lastWind, viewer.scene, terrainSampler());
     renderWindSummary(
       lastWind,
-      `${label} EPW ${stats.hours}시간 통계 · 격자 ${WIND_GRID_M}m · 2D 포텐셜 근사(CFD 아님)`,
+      `${label} EPW ${stats.hours}시간 통계 · 격자 ${WIND_GRID_M}m · ` +
+        (refH > 0 ? `2.5D(${refH}m 미만 건물은 높이 비례 통과)` : "순수 2D") +
+        ` · 포텐셜 근사(CFD 아님)`,
     );
     updateLegends();
     setStatus(
@@ -1516,7 +1534,8 @@ runLbmBtn.addEventListener("click", async () => {
         ? chooseLbmGridM(project.buildings, project.site, windDir)
         : parseInt(lbmGridSelect.value, 10);
 
-    const domain = buildLbmDomain(project.buildings, project.site, windDir, gridM);
+    const refH = Math.max(0, parseFloat(windRefHeightInput.value) || 0);
+    const domain = buildLbmDomain(project.buildings, project.site, windDir, gridM, refH);
     resetLbm();
     // 지형이 있으면 히트맵을 지형 표면에 드레이프 — 없으면 평지(y=0.2)
     lbmHeatmap = createLbmHeatmap(domain, terrainSampler());
@@ -1571,7 +1590,9 @@ runLbmBtn.addEventListener("click", async () => {
       lbmStreamGroup.visible = lbmStreamChk.checked;
       renderLbmSummary(
         result,
-        `D2Q9 · 격자 ${gridM}m · ${dirSource === "epw" ? "EPW 주풍향" : "수동 풍향"} · 2D — CFD 상세 대체 아님`,
+        `D2Q9 · 격자 ${gridM}m · ${dirSource === "epw" ? "EPW 주풍향" : "수동 풍향"} · ` +
+          (refH > 0 ? `2.5D(${refH}m 미만 건물 다공성 통과)` : "순수 2D") +
+          ` — CFD 상세 대체 아님`,
       );
       updateLegends();
       const gain = ((result.maxRatio - 1) * 100).toFixed(0);

@@ -155,6 +155,12 @@ export interface WindField {
 
 interface Obstacle {
   fp: Point2[];
+  /** 2.5D 높이 계수 (0~1, 1=벽) */
+  hf: number;
+  bx0: number;
+  by0: number;
+  bx1: number;
+  by1: number;
   cx: number;
   cy: number;
   /** 편향(밀어내기) 영향 반경 스케일 (m) */
@@ -222,6 +228,7 @@ export function computeWindField(
   site: Site,
   windDirDeg: number,
   gridM: number,
+  refHeightM = 0,
 ): WindField {
   const windSpeed = 1; // 정규화 속도장 — 실제 m/s는 표시 단계에서 곱한다
   const flow = flowDirection(windDirDeg, site.northAngle);
@@ -254,8 +261,15 @@ export function computeWindField(
       halfWidth = Math.max(halfWidth, Math.abs((p.x - cx) * perp.x + (p.y - cy) * perp.y));
       halfDepth = Math.max(halfDepth, Math.abs((p.x - cx) * flow.x + (p.y - cy) * flow.y));
     }
+    let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+    for (const p of fp) {
+      bx0 = Math.min(bx0, p.x); by0 = Math.min(by0, p.y);
+      bx1 = Math.max(bx1, p.x); by1 = Math.max(by1, p.y);
+    }
     obstacles.push({
       fp,
+      hf: refHeightM > 0 ? Math.min(1, (b.floors * b.floorHeight) / refHeightM) : 1,
+      bx0, by0, bx1, by1,
       cx,
       cy,
       influenceR: 0.5 * Math.sqrt(polygonArea(fp)) + gridM,
@@ -292,25 +306,29 @@ export function computeWindField(
       const x = minX + ix * gridM;
       const idx = iy * nx + ix;
 
-      let inside = false;
+      let insideHf = 0;
       for (const o of obstacles) {
-        if (pointInPolygon(x, y, o.fp)) {
-          inside = true;
-          break;
-        }
+        if (x < o.bx0 || x > o.bx1 || y < o.by0 || y > o.by1) continue;
+        if (pointInPolygon(x, y, o.fp)) insideHf = Math.max(insideHf, o.hf);
       }
-      if (inside) {
+      if (insideHf >= 1) {
         blocked[idx] = 1;
         continue; // u=v=0
       }
 
       let vx = flow.x * windSpeed;
       let vy = flow.y * windSpeed;
-      let attenuation = 1;
+      // 2.5D — 저층 건물 안(지붕 위로 넘어가는 바람)은 높이에 비례해 감속
+      let attenuation = insideHf > 0 ? 1 - 0.7 * insideHf : 1;
       for (const o of obstacles) {
-        // 밀어내기 편향 — 경계 최단거리 r에 반비례 감쇠
+        // 영향이 1% 미만인 먼 건물은 건너뜀 (bbox 거리 기준 — 630동 배치도 속도)
+        const bdx = Math.max(o.bx0 - x, 0, x - o.bx1);
+        const bdy = Math.max(o.by0 - y, 0, y - o.by1);
+        const bd = Math.hypot(bdx, bdy);
+        if (bd > 9 * o.influenceR && bd > 6 * o.halfWidth + o.halfDepth + o.halfWidth) continue;
+        // 밀어내기 편향 — 경계 최단거리 r에 반비례 감쇠 (2.5D: 높이 계수 배)
         const r = distToPolygonBoundary(x, y, o.fp);
-        const w = 1 / (1 + r / o.influenceR) ** 2;
+        const w = (o.hf * 1) / (1 + r / o.influenceR) ** 2;
         if (w > 1e-3) {
           const ax = x - o.cx;
           const ay = y - o.cy;
@@ -328,7 +346,7 @@ export function computeWindField(
           const behind = Math.max(0, s - o.halfDepth);
           if (behind < wakeLen) {
             const lateral = 1 - Math.abs(t) / o.halfWidth;
-            const a = 0.95 * lateral * (1 - behind / wakeLen);
+            const a = 0.95 * o.hf * lateral * (1 - behind / wakeLen);
             attenuation = Math.min(attenuation, 1 - a);
           }
         }

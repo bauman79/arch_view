@@ -122,10 +122,16 @@ export function sampleElevation(
   x: number,
   y: number,
 ): number | null {
+  const idx = triIndexOf(model);
   const t = model.triangles;
   const pts = model.points;
   const EPS = -1e-9;
-  for (let i = 0; i < t.length; i += 3) {
+  const cx = Math.floor((x - idx.minX) / idx.cell);
+  const cy = Math.floor((y - idx.minY) / idx.cell);
+  if (cx < 0 || cy < 0 || cx >= idx.nx || cy >= idx.ny) return null;
+  const list = idx.cells[cy * idx.nx + cx];
+  if (!list) return null;
+  for (const i of list) {
     const a = pts[t[i]];
     const b = pts[t[i + 1]];
     const c = pts[t[i + 2]];
@@ -141,19 +147,96 @@ export function sampleElevation(
   return null;
 }
 
-/** TIN 정점 중 (x, y)에서 가장 가까운 점의 고도 — hull 밖 폴백용 */
+/** 삼각형 균일 격자 색인 — 고도 조회를 전수 검사(삼각형 수만큼) 대신 셀 하나로 */
+interface TriIndex {
+  minX: number;
+  minY: number;
+  cell: number;
+  nx: number;
+  ny: number;
+  cells: (number[] | undefined)[];
+  /** 셀별 정점 인덱스 — 최근접 정점 탐색용 */
+  pointCells: (number[] | undefined)[];
+}
+
+const triIndexCache = new WeakMap<TerrainModel, TriIndex>();
+
+function triIndexOf(model: TerrainModel): TriIndex {
+  const hit = triIndexCache.get(model);
+  if (hit) return hit;
+  const t = model.triangles;
+  const pts = model.points;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+  }
+  const triCount = t.length / 3;
+  // 셀당 삼각형 몇 개 수준이 되도록
+  const area = Math.max(1, (maxX - minX) * (maxY - minY));
+  const cell = Math.max(1, Math.sqrt(area / Math.max(1, triCount)) * 2);
+  const nx = Math.max(1, Math.ceil((maxX - minX) / cell) + 1);
+  const ny = Math.max(1, Math.ceil((maxY - minY) / cell) + 1);
+  const cells: (number[] | undefined)[] = new Array(nx * ny);
+  for (let i = 0; i < t.length; i += 3) {
+    const a = pts[t[i]], b = pts[t[i + 1]], c = pts[t[i + 2]];
+    const x0 = Math.floor((Math.min(a.x, b.x, c.x) - minX) / cell);
+    const x1 = Math.floor((Math.max(a.x, b.x, c.x) - minX) / cell);
+    const y0 = Math.floor((Math.min(a.y, b.y, c.y) - minY) / cell);
+    const y1 = Math.floor((Math.max(a.y, b.y, c.y) - minY) / cell);
+    for (let yy = y0; yy <= y1; yy++) {
+      for (let xx = x0; xx <= x1; xx++) {
+        const k = yy * nx + xx;
+        (cells[k] ??= []).push(i);
+      }
+    }
+  }
+  const pointCells: (number[] | undefined)[] = new Array(nx * ny);
+  pts.forEach((p, i) => {
+    const k = Math.floor((p.y - minY) / cell) * nx + Math.floor((p.x - minX) / cell);
+    (pointCells[k] ??= []).push(i);
+  });
+  const idx = { minX, minY, cell, nx, ny, cells, pointCells };
+  triIndexCache.set(model, idx);
+  return idx;
+}
+
+/** TIN 정점 중 (x, y)에서 가장 가까운 점의 고도 — hull 밖 폴백용 (격자 색인으로 주변 셀만 탐색) */
 export function nearestPointElevation(
   model: TerrainModel,
   x: number,
   y: number,
 ): number {
+  const idx = triIndexOf(model);
+  const pts = model.points;
+  // 색인 범위 밖이면 가장 가까운 가장자리 셀부터
+  const cx = Math.min(idx.nx - 1, Math.max(0, Math.floor((x - idx.minX) / idx.cell)));
+  const cy = Math.min(idx.ny - 1, Math.max(0, Math.floor((y - idx.minY) / idx.cell)));
   let best = 0;
   let bestD = Infinity;
-  for (const p of model.points) {
-    const d = (p.x - x) ** 2 + (p.y - y) ** 2;
-    if (d < bestD) {
-      bestD = d;
-      best = p.z;
+  const maxR = Math.max(idx.nx, idx.ny);
+  for (let r = 0; r <= maxR; r++) {
+    for (let yy = cy - r; yy <= cy + r; yy++) {
+      if (yy < 0 || yy >= idx.ny) continue;
+      for (let xx = cx - r; xx <= cx + r; xx++) {
+        if (xx < 0 || xx >= idx.nx) continue;
+        if (Math.max(Math.abs(xx - cx), Math.abs(yy - cy)) !== r) continue; // 고리만
+        const list = idx.pointCells[yy * idx.nx + xx];
+        if (!list) continue;
+        for (const i of list) {
+          const p = pts[i];
+          const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+          if (d < bestD) {
+            bestD = d;
+            best = p.z;
+          }
+        }
+      }
+    }
+    // 찾은 점보다 다음 고리가 확실히 멀면 종료
+    if (bestD < Infinity) {
+      const ringDist = r * idx.cell;
+      if (ringDist * ringDist > bestD) break;
     }
   }
   return best;

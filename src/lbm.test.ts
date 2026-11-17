@@ -211,3 +211,40 @@ describe("computeLbmMetrics — 손계산 대조", () => {
     expect(LBM_SHADOW_RATIO).toBe(0.5);
   });
 });
+
+describe("2.5D 보정 — 저층 건물은 다공성 저항", () => {
+  const site = defaultProject().site;
+  const low = { ...mkBuilding("low", rect(-10, -10, 10, 10)), floors: 2, floorHeight: 3 }; // 6m
+  const tall = { ...mkBuilding("tall", rect(-10, -10, 10, 10)), floors: 10, floorHeight: 3 }; // 30m
+
+  it("기준 높이 미만은 벽이 아니라 저항 셀, 이상은 벽", () => {
+    const dl = buildLbmDomain([low], site, 270, 2, 20);
+    const dt = buildLbmDomain([tall], site, 270, 2, 20);
+    const solidL = dl.solid.reduce((a, v) => a + v, 0);
+    const solidT = dt.solid.reduce((a, v) => a + v, 0);
+    expect(solidL).toBe(0);
+    expect(solidT).toBeGreaterThan(50);
+    expect(Math.max(...dl.drag!)).toBeGreaterThan(0);
+    // 순수 2D(기준 0)는 저층도 벽
+    expect(buildLbmDomain([low], site, 270, 2, 0).solid.reduce((a, v) => a + v, 0)).toBeGreaterThan(50);
+  });
+
+  it("저층 건물 안·뒤 풍속은 줄지만 0이 아니다 (벽 건물보다 빠름)", () => {
+    const dl = buildLbmDomain([low], site, 270, 2, 20);
+    const dt = buildLbmDomain([tall], site, 270, 2, 20);
+    const rl = runLbmSync(dl, 1500).solver.speedRatio();
+    const rt = runLbmSync(dt, 1500).solver.speedRatio();
+    // 건물 바로 뒤(하류 6m) 중앙선 셀
+    const behind = (d: typeof dl) => {
+      const loc = lbmDxfToLocal(d, 16, 0); // 서풍(270) → 흐름 +x(동쪽)
+      const ix = Math.round((loc.x - d.lx0) / d.gridM);
+      const iy = Math.round((loc.y - d.ly0) / d.gridM);
+      return iy * d.nx + ix;
+    };
+    const vl = rl[behind(dl)];
+    const vt = rt[behind(dt)];
+    expect(vl).toBeLessThan(1);
+    expect(vl).toBeGreaterThan(0.2);
+    expect(vl).toBeGreaterThan(vt + 0.1);
+  });
+});
