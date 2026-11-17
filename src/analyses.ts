@@ -33,6 +33,8 @@ export interface AnalysisContext {
    * onPoint는 점을 찍을 때마다 불린다(첫 점 표시 등).
    */
   pickGroundPoints?(n: number, prompt: string, onPoint?: (p: Point2, i: number) => void): Promise<Point2[] | null>;
+  /** 되돌리기 기록 쌓기 (차양·가로수 편집 등) */
+  commitHistory?(): void;
   /** 파일 저장(바탕화면 저장 창 → 공유/다운로드 폴백) */
   saveFile(blob: Blob, filename: string, description: string, accept: Record<string, string[]>): Promise<void>;
 }

@@ -7,7 +7,8 @@ import { pointShaded, shadowCasters, sunPlan, type ShadowCaster } from "./ground
 import { gradientFromStops } from "./legend";
 import { yieldToEventLoop } from "./pv";
 import { sunSamples } from "./sun";
-import type { Canopy, OverlayLine, Point2, Project } from "./types";
+import type { Canopy, OverlayLine, Point2, Project, Tree } from "./types";
+import { canopyCasters, createStreetGroup, treeCasters, treeLine } from "./streetscape";
 
 /**
  * 가로 그늘보행권 — 폭염 시간대(기본 8월 초 11~16시)에 보도가 그늘에 드는 비율.
@@ -38,43 +39,12 @@ export interface ShadeWalkResult {
   /** 차양까지 넣은 그늘 보행 비율 (차양이 없으면 ratioAfter와 같음) */
   ratioCanopy: number;
   canopyCount: number;
+  treeCount: number;
   totalLen: number;
   source: "ROAD_AREA" | "ROAD_CL";
 }
 
 const SAMPLE_M = 3;
-/** 차양 판 두께 (m) */
-const CANOPY_T = 0.15;
-
-/** 차양 → 그림자 장애물 (a→b 중심선, 폭 width, 지반 위 height의 얇은 판) */
-export function canopyFootprint(c: Canopy): Point2[] {
-  const dx = c.b.x - c.a.x, dy = c.b.y - c.a.y;
-  const L = Math.hypot(dx, dy) || 1;
-  const nx = (-dy / L) * (c.width / 2), ny = (dx / L) * (c.width / 2);
-  return [
-    { x: c.a.x + nx, y: c.a.y + ny },
-    { x: c.b.x + nx, y: c.b.y + ny },
-    { x: c.b.x - nx, y: c.b.y - ny },
-    { x: c.a.x - nx, y: c.a.y - ny },
-  ];
-}
-
-export function canopyCasters(canopies: Canopy[]): ShadowCaster[] {
-  return canopies.map((c) => {
-    const fp = canopyFootprint(c);
-    return {
-      id: c.id,
-      fp,
-      base: Math.max(0, c.height - CANOPY_T),
-      height: c.height,
-      minX: Math.min(...fp.map((p) => p.x)),
-      minY: Math.min(...fp.map((p) => p.y)),
-      maxX: Math.max(...fp.map((p) => p.x)),
-      maxY: Math.max(...fp.map((p) => p.y)),
-    };
-  });
-}
-
 /** 폴리라인을 간격 step으로 나눈 점 + 진행 방향 */
 function samplePolyline(pts: Point2[], closed: boolean, step: number): { p: Point2; t: Point2 }[] {
   const out: { p: Point2; t: Point2 }[] = [];
@@ -126,7 +96,18 @@ export function sidewalkPoints(
 
 export async function runShadeWalk(
   project: Project,
-  opts: { date: string; startMin: number; endMin: number; radius: number; threshold: number; halfWidth: number; canopies?: Canopy[] },
+  opts: {
+    date: string;
+    startMin: number;
+    endMin: number;
+    radius: number;
+    threshold: number;
+    halfWidth: number;
+    canopies?: Canopy[];
+    trees?: Tree[];
+    /** 지형 고도 — 주면 지점·장애물 지반고 차이를 반영 */
+    elevate?: (x: number, y: number) => number;
+  },
   onProgress: (pct: number) => void,
 ): Promise<ShadeWalkResult> {
   const { site, buildings } = project;
@@ -151,19 +132,20 @@ export async function runShadeWalk(
   const castAll: ShadowCaster[] = shadowCasters(buildings);
   const castBefore = castAll.filter((c) => !plans.some((p) => p.id === c.id));
   const suns = samples.map((s) => (s.dir ? sunPlan(s.dir) : null));
-  const castCanopy = canopyCasters(opts.canopies ?? []);
+  const castCanopy = [...canopyCasters(opts.canopies ?? [], opts.elevate), ...treeCasters(opts.trees ?? [], opts.elevate)];
   const points: WalkPoint[] = pts.map((w) => ({ ...w, before: 0, after: 0, canopy: 0 }));
   const CHUNK = 300;
   for (let i = 0; i < points.length; i += CHUNK) {
     const end = Math.min(points.length, i + CHUNK);
     for (let k = i; k < end; k++) {
       const w = points[k];
+      const zr = opts.elevate ? opts.elevate(w.p.x, w.p.y) : undefined;
       let b = 0, a = 0, c = 0;
       for (const sp of suns) {
         if (!sp) { b++; a++; c++; continue; }
-        if (pointShaded(w.p.x, w.p.y, castBefore, sp)) { b++; a++; c++; continue; }
-        if (pointShaded(w.p.x, w.p.y, castAll, sp)) { a++; c++; continue; }
-        if (castCanopy.length && pointShaded(w.p.x, w.p.y, castCanopy, sp)) c++;
+        if (pointShaded(w.p.x, w.p.y, castBefore, sp, zr)) { b++; a++; c++; continue; }
+        if (pointShaded(w.p.x, w.p.y, castAll, sp, zr)) { a++; c++; continue; }
+        if (castCanopy.length && pointShaded(w.p.x, w.p.y, castCanopy, sp, zr)) c++;
       }
       w.before = b / suns.length;
       w.after = a / suns.length;
@@ -184,7 +166,8 @@ export async function runShadeWalk(
     ratioBefore: ratio((w) => w.before),
     ratioAfter: ratio((w) => w.after),
     ratioCanopy: ratio((w) => w.canopy),
-    canopyCount: castCanopy.length,
+    canopyCount: (opts.canopies ?? []).length,
+    treeCount: (opts.trees ?? []).length,
     totalLen: total,
     source,
   };
@@ -231,45 +214,17 @@ function hm(m: number): string {
   return `${Math.floor(m / 60)}시${m % 60 ? ` ${m % 60}분` : ""}`;
 }
 
-/** 차양 3D 표시 — 기둥 2개 + 판, 그림자를 드리운다 */
-export function createCanopyGroup(canopies: Canopy[], elevate: ((x: number, y: number) => number) | undefined): THREE.Group {
-  const g = new THREE.Group();
-  g.name = "canopies";
-  const slabMat = new THREE.MeshLambertMaterial({ color: 0xe2e8f0 });
-  const postMat = new THREE.MeshLambertMaterial({ color: 0x64748b });
-  for (const c of canopies) {
-    const dx = c.b.x - c.a.x, dy = c.b.y - c.a.y;
-    const L = Math.hypot(dx, dy);
-    if (L < 0.1) continue;
-    const mx = (c.a.x + c.b.x) / 2, my = (c.a.y + c.b.y) / 2;
-    const gl = elevate ? elevate(mx, my) : 0;
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(L, CANOPY_T, c.width), slabMat);
-    slab.position.set(mx, gl + c.height - CANOPY_T / 2, -my);
-    slab.rotation.y = Math.atan2(dy, dx);
-    slab.castShadow = true;
-    slab.receiveShadow = true;
-    g.add(slab);
-    for (const p of [c.a, c.b]) {
-      const pg = elevate ? elevate(p.x, p.y) : 0;
-      const h = Math.max(0.5, gl + c.height - pg);
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.2, h, 0.2), postMat);
-      post.position.set(p.x, pg + h / 2, -p.y);
-      post.castShadow = true;
-      g.add(post);
-    }
-  }
-  return g;
-}
-
 export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
   let result: ShadeWalkResult | null = null;
   let overlay: THREE.Object3D | null = null;
   let canopyGroup: THREE.Group | null = null;
   let seq = 0;
+  const streetLabel = (r: ShadeWalkResult) =>
+    [r.canopyCount ? `차양 ${r.canopyCount}개` : "", r.treeCount ? `가로수 ${r.treeCount}그루` : ""].filter(Boolean).join("·");
 
   const drawCanopies = () => {
     disposeObject(canopyGroup);
-    canopyGroup = createCanopyGroup(ctx.project.canopies ?? [], ctx.elevate());
+    canopyGroup = createStreetGroup(ctx.project, ctx.elevate());
     ctx.viewer.scene.add(canopyGroup);
     renderList();
   };
@@ -277,7 +232,8 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
     const box = document.getElementById("shadewalk-canopy-list");
     if (!box) return;
     const list = ctx.project.canopies ?? [];
-    box.innerHTML = list.length
+    const nt = (ctx.project.trees ?? []).length;
+    box.innerHTML = (list.length
       ? list
           .map((c, i) => {
             const L = Math.hypot(c.b.x - c.a.x, c.b.y - c.a.y);
@@ -285,7 +241,15 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
               `<button class="btn mini" data-del="${c.id}" title="이 차양 삭제">×</button></div>`;
           })
           .join("")
-      : `<p class="hint">차양 없음 — "차양 추가"를 누르고 지도에서 시작점·끝점을 찍으세요.</p>`;
+      : `<p class="hint">차양 없음 — "차양 추가"를 누르고 지도에서 시작점·끝점을 찍으세요.</p>`) +
+      `<div class="canopy-row"><span>가로수 ${nt}그루</span>${nt ? `<button class="btn mini" id="shadewalk-tree-undo" title="마지막에 심은 가로수 지우기">마지막 지우기</button>` : ""}</div>`;
+    document.getElementById("shadewalk-tree-undo")?.addEventListener("click", () => {
+      const ts = ctx.project.trees ?? [];
+      // 마지막으로 심은 묶음(같은 접두 id) 지우기
+      const lastGroup = ts.length ? ts[ts.length - 1].id.split(":")[0] : "";
+      ctx.project.trees = ts.filter((t) => t.id.split(":")[0] !== lastGroup);
+      canopiesChanged("마지막에 심은 가로수를 지웠습니다");
+    });
     for (const b of box.querySelectorAll<HTMLButtonElement>("button[data-del]")) {
       b.addEventListener("click", () => {
         ctx.project.canopies = (ctx.project.canopies ?? []).filter((c) => c.id !== b.dataset.del);
@@ -295,6 +259,7 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
   };
   const canopiesChanged = (msg: string) => {
     drawCanopies();
+    ctx.commitHistory?.();
     if (result) {
       result = null;
       disposeObject(overlay);
@@ -310,7 +275,7 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
     id: "shadewalk",
     slot: "env",
     title: "가로 그늘보행권",
-    hint: "폭염 시간대 보도가 그늘에 드는 비율 — 사업 전·후·차양 설치 후 비교 (가로수 미반영)",
+    hint: "폭염 시간대 보도가 그늘에 드는 비율 — 사업 전·후·차양·가로수 설치 후 비교 (지형 반영)",
     bodyHtml: `
       <div class="row"><label for="shadewalk-cw">차양 폭(m)</label>
         <input type="number" id="shadewalk-cw" value="3" min="0.5" max="20" step="0.5" /></div>
@@ -319,6 +284,17 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
       <div class="row">
         <button class="btn mini" id="shadewalk-add">차양 추가 (지도에서 두 점)</button>
         <button class="btn mini" id="shadewalk-clear-canopies">차양 모두 지우기</button>
+      </div>
+      <details class="lp-sub"><summary>가로수 크기·간격</summary>
+        <div class="row"><label for="shadewalk-tr">수관 반경(m)</label><input type="number" id="shadewalk-tr" value="3" min="0.5" max="10" step="0.5" /></div>
+        <div class="row"><label for="shadewalk-th">수고(m)</label><input type="number" id="shadewalk-th" value="8" min="2" max="30" step="0.5" /></div>
+        <div class="row"><label for="shadewalk-tb">지하고(m)</label><input type="number" id="shadewalk-tb" value="2.5" min="0.5" max="10" step="0.5" /></div>
+        <div class="row"><label for="shadewalk-ts">줄 심기 간격(m)</label><input type="number" id="shadewalk-ts" value="8" min="2" max="30" step="1" /></div>
+      </details>
+      <div class="row">
+        <button class="btn mini" id="shadewalk-tree-one">가로수 심기 (클릭마다, Esc 끝)</button>
+        <button class="btn mini" id="shadewalk-tree-line">가로수 줄 심기 (두 점)</button>
+        <button class="btn mini" id="shadewalk-clear-trees">가로수 모두 지우기</button>
       </div>
       <div id="shadewalk-canopy-list"></div>`,
     onMount() {
@@ -337,6 +313,36 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
           { id: `C${Date.now().toString(36)}${seq++}`, a: pts[0], b: pts[1], width, height },
         ];
         canopiesChanged(`차양을 추가했습니다 (${ctx.project.canopies.length}개)`);
+      });
+      const treeSpec = () => ({
+        radius: numInput("shadewalk-tr", 3, 0.5, 10),
+        height: numInput("shadewalk-th", 8, 2, 30),
+        crownBase: numInput("shadewalk-tb", 2.5, 0.5, 10),
+      });
+      document.getElementById("shadewalk-tree-one")!.addEventListener("click", async () => {
+        if (!ctx.pickGroundPoints) return;
+        const spec = treeSpec();
+        const pts = await ctx.pickGroundPoints(0, "가로수 위치를 클릭하세요 — 끝내려면 Esc");
+        if (!pts || !pts.length) return;
+        const gid = `T${Date.now().toString(36)}${seq++}`;
+        ctx.project.trees = [...(ctx.project.trees ?? []), ...pts.map((p, i) => ({ id: `${gid}:${i}`, p, ...spec }))];
+        canopiesChanged(`가로수 ${pts.length}그루를 심었습니다 (총 ${ctx.project.trees.length})`);
+      });
+      document.getElementById("shadewalk-tree-line")!.addEventListener("click", async () => {
+        if (!ctx.pickGroundPoints) return;
+        const spec = treeSpec();
+        const spacing = numInput("shadewalk-ts", 8, 2, 30);
+        const pts = await ctx.pickGroundPoints(2, "가로수 줄의 시작점을 찍으세요");
+        if (!pts) return;
+        const gid = `T${Date.now().toString(36)}${seq++}`;
+        const line = treeLine(pts[0], pts[1], spacing);
+        ctx.project.trees = [...(ctx.project.trees ?? []), ...line.map((p, i) => ({ id: `${gid}:${i}`, p, ...spec }))];
+        canopiesChanged(`가로수 ${line.length}그루를 ${spacing}m 간격으로 심었습니다 (총 ${ctx.project.trees.length})`);
+      });
+      document.getElementById("shadewalk-clear-trees")!.addEventListener("click", () => {
+        if (!(ctx.project.trees ?? []).length) return;
+        ctx.project.trees = [];
+        canopiesChanged("가로수를 모두 지웠습니다");
       });
       document.getElementById("shadewalk-clear-canopies")!.addEventListener("click", () => {
         if (!(ctx.project.canopies ?? []).length) return;
@@ -380,6 +386,8 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
           threshold: numInput("shadewalk-threshold", 50, 10, 100) / 100,
           halfWidth: numInput("shadewalk-half", 6, 2, 30),
           canopies: ctx.project.canopies ?? [],
+          trees: ctx.project.trees ?? [],
+          elevate: ctx.elevate(),
         },
         onProgress,
       );
@@ -388,7 +396,7 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
       return (
         `그늘보행권 — 그늘 보행 비율 ${(result.ratioCanopy * 100).toFixed(1)}% ` +
         `(사업 전 ${(result.ratioBefore * 100).toFixed(1)}%` +
-        (result.canopyCount ? ` · 차양 전 ${(result.ratioAfter * 100).toFixed(1)}%` : "") +
+        (streetLabel(result) ? ` · ${streetLabel(result)} 전 ${(result.ratioAfter * 100).toFixed(1)}%` : "") +
         `) · 보도 ${Math.round(result.totalLen)}m`
       );
     },
@@ -408,8 +416,8 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
       return (
         `<div class="an-big">${(r.ratioCanopy * 100).toFixed(1)}%</div>` +
         `<div class="hint">사업 전 ${(r.ratioBefore * 100).toFixed(1)}% → 사업 후 ${(r.ratioAfter * 100).toFixed(1)}% (${d >= 0 ? "+" : ""}${d.toFixed(1)}%p)</div>` +
-        (r.canopyCount
-          ? `<div class="hint">차양 ${r.canopyCount}개 설치 효과 ${dc >= 0 ? "+" : ""}${dc.toFixed(1)}%p</div>`
+        (streetLabel(r)
+          ? `<div class="hint">${streetLabel(r)} 설치 효과 ${dc >= 0 ? "+" : ""}${dc.toFixed(1)}%p</div>`
           : "") +
         `<div class="hint">보도 ${Math.round(r.totalLen).toLocaleString()}m · ${r.date} ${hm(r.startMin)}~${hm(r.endMin)} · ${r.source === "ROAD_AREA" ? "도로영역 가장자리" : "도로중심선 ± 반폭"}</div>`
       );
@@ -428,8 +436,8 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
           ],
           note:
             `그늘 보행 ${(r.ratioCanopy * 100).toFixed(1)}% (사업 전 ${(r.ratioBefore * 100).toFixed(1)}%` +
-            (r.canopyCount ? `, 차양 ${r.canopyCount}개 포함` : "") +
-            `) · 가로수 미반영`,
+            (streetLabel(r) ? `, ${streetLabel(r)} 포함` : "") +
+            `)`,
         },
       ];
     },
@@ -440,7 +448,7 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
         title: "가로 그늘보행권",
         value:
           `그늘 보행 ${pct(r.ratioCanopy, 1)} (사업 전 ${pct(r.ratioBefore, 1)}, 사업 ${d >= 0 ? "+" : ""}${d.toFixed(1)}%p` +
-          (r.canopyCount ? `, 차양 ${r.canopyCount}개 +${((r.ratioCanopy - r.ratioAfter) * 100).toFixed(1)}%p` : "") +
+          (streetLabel(r) ? `, ${streetLabel(r)} +${((r.ratioCanopy - r.ratioAfter) * 100).toFixed(1)}%p` : "") +
           `)`,
         verdict: "info",
       };
@@ -451,16 +459,17 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
       return {
         name: "그늘보행권",
         rows: [
-          ["가로 그늘보행권", `${r.date} ${hm(r.startMin)}~${hm(r.endMin)} · 그늘 기준 ${Math.round(r.threshold * 100)}% · 건물·차양 그림자(가로수 미반영)`],
+          ["가로 그늘보행권", `${r.date} ${hm(r.startMin)}~${hm(r.endMin)} · 그늘 기준 ${Math.round(r.threshold * 100)}% · 건물·차양·가로수 그림자(수관 불투명 가정)`],
           ["보도 연장(m)", Math.round(r.totalLen)],
           ["그늘 보행 비율 — 사업 전", pct(r.ratioBefore, 1)],
           ["그늘 보행 비율 — 사업 후", pct(r.ratioAfter, 1)],
-          ["그늘 보행 비율 — 사업 후 + 차양", pct(r.ratioCanopy, 1)],
+          ["그늘 보행 비율 — 사업 후 + 차양·가로수", pct(r.ratioCanopy, 1)],
+          ["가로수(그루)", r.treeCount],
           [],
           ["차양", "길이(m)", "폭(m)", "높이(m)"],
           ...cs.map((c, i) => [`차양 ${i + 1}`, Math.round(Math.hypot(c.b.x - c.a.x, c.b.y - c.a.y) * 10) / 10, c.width, c.height]),
           [],
-          ["X", "Y", "사업 전 그늘(%)", "사업 후 그늘(%)", "차양 포함(%)"],
+          ["X", "Y", "사업 전 그늘(%)", "사업 후 그늘(%)", "차양·가로수 포함(%)"],
           ...r.points.map((w) => [
             Math.round(w.p.x * 10) / 10,
             Math.round(w.p.y * 10) / 10,

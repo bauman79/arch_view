@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { footprintCentroid, worldFootprint } from "./buildings";
 import type { AnalysisContext, AnalysisModule, BoardItem } from "./analyses";
-import { disposeObject, numInput, selInput, textSprite } from "./analyses";
+import { chkInput, disposeObject, numInput, selInput, textSprite } from "./analyses";
 import { buildLinesDxf, type DxfLineLayer } from "./dxfexport";
 import {
   contourSegments,
@@ -18,6 +18,7 @@ import {
 import { yieldToEventLoop } from "./pv";
 import { sunSamples } from "./sun";
 import type { Point2, Project } from "./types";
+import { streetCasters } from "./streetscape";
 import { hexCss } from "./legend";
 
 /**
@@ -40,6 +41,7 @@ export interface ShadowPlanResult {
   /** 최고 단계 안에 걸리는 인접건물 */
   affected: { id: string; name: string; at: THREE.Vector3 }[];
   target: "plan" | "all";
+  terrain: boolean;
 }
 
 export const ISO_COLORS = [0xfacc15, 0xf97316, 0xdc2626, 0x7f1d1d, 0x4c0519];
@@ -51,14 +53,24 @@ function hourColor(i: number, n: number): number {
 
 export async function runShadowPlan(
   project: Project,
-  opts: { startMin: number; endMin: number; stepMin: number; cell: number; levels: number[]; target: "plan" | "all" },
+  opts: {
+    startMin: number;
+    endMin: number;
+    stepMin: number;
+    cell: number;
+    levels: number[];
+    target: "plan" | "all";
+    /** 차양·가로수 그림자도 넣기 */
+    street?: boolean;
+    elevate?: (x: number, y: number) => number;
+  },
   onProgress: (pct: number) => void,
 ): Promise<ShadowPlanResult> {
   const { site, analysis, buildings } = project;
   const plans = buildings.filter((b) => b.type === "계획주동");
   if (plans.length === 0) throw new Error("계획주동이 없습니다");
   const casterBuildings = opts.target === "plan" ? plans : buildings;
-  const casters = shadowCasters(casterBuildings);
+  const casters = [...shadowCasters(casterBuildings), ...(opts.street ? streetCasters(project, opts.elevate) : [])];
   const samples = sunSamples(analysis.date, site.latitude, site.longitude, site.northAngle, opts.startMin, opts.endMin - opts.stepMin, opts.stepMin);
 
   // 범위 — 계획주동 bbox + 가장 긴 그림자 길이
@@ -82,7 +94,7 @@ export async function runShadowPlan(
   const hourly: ShadowPlanResult["hourly"] = [];
   for (let i = 0; i < samples.length; i++) {
     const s = samples[i];
-    shadowMask(grid, casters, s.dir, mask);
+    shadowMask(grid, casters, s.dir, mask, opts.elevate);
     for (let k = 0; k < n; k++) if (mask[k]) hours[k] += stepH;
     if (s.minutes % 60 === 0) {
       const segs = contourSegments(grid, mask, 0.5);
@@ -107,7 +119,7 @@ export async function runShadowPlan(
   // 마지막 정시(예: 15시)도 윤곽선에 포함
   if (opts.endMin % 60 === 0 && !hourly.some((h) => h.minutes === opts.endMin)) {
     const last = sunSamples(analysis.date, site.latitude, site.longitude, site.northAngle, opts.endMin, opts.endMin, 1)[0];
-    shadowMask(grid, casters, last.dir, mask);
+    shadowMask(grid, casters, last.dir, mask, opts.elevate);
     const segs = contourSegments(grid, mask, 0.5);
     let label: Point2 | null = null;
     const sp = last.dir ? sunPlan(last.dir) : null;
@@ -169,6 +181,7 @@ export async function runShadowPlan(
     outsideArea,
     affected,
     target: opts.target,
+    terrain: !!opts.elevate,
   };
 }
 
@@ -221,7 +234,7 @@ export function createShadowPlanModule(ctx: AnalysisContext): AnalysisModule {
     id: "shadowplan",
     slot: "sun",
     title: "일영도 (시간별 그림자·등시간선)",
-    hint: "기준일(상단 날짜) 시간별 그림자 윤곽 + 그림자가 N시간 이상 지는 범위 · 평지 가정",
+    hint: "기준일(상단 날짜) 시간별 그림자 윤곽 + 그림자가 N시간 이상 지는 범위 · 지형 높이차 반영(근사)",
     settingsHtml: `
       <div class="row"><label for="shadowplan-range">시간대</label>
         <select id="shadowplan-range">
@@ -239,6 +252,8 @@ export function createShadowPlanModule(ctx: AnalysisContext): AnalysisModule {
           <option value="plan" selected>계획주동만</option>
           <option value="all">계획주동+인접건물</option>
         </select></div>
+      <div class="row"><label><input type="checkbox" id="shadowplan-street" /> 차양·가로수 그림자 포함</label></div>
+      <div class="row"><label><input type="checkbox" id="shadowplan-terrain" checked /> 지형 높이차 반영</label></div>
       <div class="row"><label for="shadowplan-cell">격자(m)</label>
         <input type="number" id="shadowplan-cell" value="2" min="0.5" max="5" step="0.5" /></div>`,
     extraButtons: [
@@ -270,6 +285,8 @@ export function createShadowPlanModule(ctx: AnalysisContext): AnalysisModule {
           cell: numInput("shadowplan-cell", 2, 0.5, 5),
           levels,
           target: selInput("shadowplan-target", "plan") as "plan" | "all",
+          street: chkInput("shadowplan-street", false),
+          elevate: chkInput("shadowplan-terrain", true) ? ctx.elevate() : undefined,
         },
         onProgress,
       );
@@ -310,7 +327,7 @@ export function createShadowPlanModule(ctx: AnalysisContext): AnalysisModule {
             ...r.iso.map((s, i) => ({ color: hexCss(ISO_COLORS[i % ISO_COLORS.length]), label: `${s.level}시간 이상 그늘` })),
             { color: hexCss(hourColor(0, 2)), label: "시간별 그림자 윤곽" },
           ],
-          note: r.target === "plan" ? "계획주동 그림자만 · 평지 가정" : "계획주동+인접건물 그림자 · 평지 가정",
+          note: (r.target === "plan" ? "계획주동 그림자만" : "계획주동+인접건물 그림자") + (r.terrain ? " · 지형 반영(근사)" : " · 평지 가정"),
         },
       ];
     },
@@ -332,7 +349,7 @@ export function createShadowPlanModule(ctx: AnalysisContext): AnalysisModule {
       return {
         name: "일영도",
         rows: [
-          ["일영도", `${r.date} ${hm(r.startMin)}~${hm(r.endMin)} · ${r.stepMin}분 간격 · 격자 ${r.grid.cell}m · 평지 가정`],
+          ["일영도", `${r.date} ${hm(r.startMin)}~${hm(r.endMin)} · ${r.stepMin}분 간격 · 격자 ${r.grid.cell}m · ${r.terrain ? "지형 반영(근사)" : "평지 가정"}`],
           ["그림자 대상", r.target === "plan" ? "계획주동만" : "계획주동+인접건물"],
           [],
           ["등시간 단계", "대지 밖 그늘 면적(㎡)"],

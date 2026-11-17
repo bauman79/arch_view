@@ -69,3 +69,26 @@ describe("일영도", () => {
     expect(r.affected.map((a) => a.name)).toEqual(["N"]);
   });
 });
+
+describe("지형 높이차 반영", () => {
+  const sun = sunPlan(new THREE.Vector3(0, Math.SQRT1_2, Math.SQRT1_2))!; // 정남 45°
+  it("건물보다 10m 낮은 지점은 그림자가 10m 더 길게 닿는다", () => {
+    const c = shadowCasters([mkBuilding("T", "계획주동", rect(0, 0, 10, 10), 10, { terrainElevation: 10 })]);
+    // 북쪽 35m (평지 기준 그림자 30m 밖)
+    expect(pointShaded(5, 45, c, sun)).toBe(false);
+    expect(pointShaded(5, 45, c, sun, 0)).toBe(true); // 지반 10m 낮음 → 그림자 40m
+    expect(pointShaded(5, 45, c, sun, 20)).toBe(false); // 지반 10m 높음 → 20m
+    expect(pointShaded(5, 25, c, sun, 20)).toBe(true);
+  });
+
+  it("마스크도 내리막이면 그림자 면적이 커진다", () => {
+    const b = mkBuilding("T", "계획주동", rect(0, 0, 10, 10), 10, { terrainElevation: 10 });
+    const g = makeGrid(-20, -20, 40, 80, 1);
+    const flat = shadowMask(g, shadowCasters([b]), new THREE.Vector3(0, Math.SQRT1_2, Math.SQRT1_2));
+    // 건물 자리는 10m, 북쪽으로 갈수록 내려가 y=20부터 0m
+    const slope = (_x: number, y: number) => (y <= 10 ? 10 : Math.max(0, 10 - (y - 10)));
+    const down = shadowMask(g, shadowCasters([b]), new THREE.Vector3(0, Math.SQRT1_2, Math.SQRT1_2), undefined, slope);
+    const n = (m: Uint8Array) => m.reduce((a, v) => a + v, 0);
+    expect(n(down)).toBeGreaterThan(n(flat) + 50);
+  });
+});

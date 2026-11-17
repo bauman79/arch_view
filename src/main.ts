@@ -155,6 +155,8 @@ import {
   seoulSetbackRules,
   statutorySetbackRules,
   type Building,
+  type Canopy,
+  type Tree,
   type MassType,
   type OverlayLine,
   type Point2,
@@ -628,7 +630,12 @@ const undoBtn = document.getElementById("undo-btn") as HTMLButtonElement;
 const redoBtn = document.getElementById("redo-btn") as HTMLButtonElement;
 
 function historySnapshot(): string {
-  return JSON.stringify({ buildings: project.buildings, siteAreaM2: project.site.siteAreaM2 });
+  return JSON.stringify({
+    buildings: project.buildings,
+    siteAreaM2: project.site.siteAreaM2,
+    canopies: project.canopies,
+    trees: project.trees,
+  });
 }
 
 function updateUndoButtons(): void {
@@ -655,9 +662,16 @@ function commitHistory(): void {
 
 function restoreHistory(idx: number): void {
   if (idx < 0 || idx >= history.length) return;
-  const d = JSON.parse(history[idx]) as { buildings: Building[]; siteAreaM2: number };
+  const d = JSON.parse(history[idx]) as {
+    buildings: Building[];
+    siteAreaM2: number;
+    canopies?: Canopy[];
+    trees?: Tree[];
+  };
   historyIdx = idx;
   project.buildings = d.buildings;
+  project.canopies = d.canopies ?? [];
+  project.trees = d.trees ?? [];
   project.site.siteAreaM2 = d.siteAreaM2;
   siteAreaInput.value = String(d.siteAreaM2);
   if (selectedId && !project.buildings.some((b) => b.id === selectedId)) selectedId = null;
@@ -669,6 +683,7 @@ function restoreHistory(idx: number): void {
   updateSetbackChecks();
   updateSiteTotals();
   updateUndoButtons();
+  notifyProjectLoaded(); // 차양·가로수 다시 그리기
 }
 
 function undo(): void {
@@ -2263,6 +2278,7 @@ function applyViewData(d: ViewFileData): void {
   project.terrainPoints = d.terrainPoints;
   if (d.savedViews) project.savedViews = d.savedViews;
   project.canopies = d.canopies ?? [];
+  project.trees = d.trees ?? [];
   renderSavedViews();
   sceneOrigin = d.sceneOrigin;
   // id 카운터는 이어서 발급 — 복원된 건물과 새 건물의 id 충돌 방지
@@ -2325,6 +2341,7 @@ function resetProject(): void {
     terrainPoints: [],
     savedViews: [],
     canopies: [],
+    trees: [],
   });
   setStatus("새로 시작 — 화면이 초기화되었습니다. DXF 파일을 불러오세요.");
 }
@@ -2766,8 +2783,13 @@ canvas.addEventListener("pointerup", (e) => {
         viewer.scene.add(mk);
         pickMarkers.push(mk);
         gp.onPoint?.(p, gp.pts.length - 1);
-        if (gp.pts.length >= gp.need) gp.resolve(gp.pts);
-        else setStatus(`${gp.pts.length}번째 점을 찍었습니다 — 다음 점을 찍으세요 (Esc로 취소)`);
+        if (gp.need > 0 && gp.pts.length >= gp.need) gp.resolve(gp.pts);
+        else
+          setStatus(
+            gp.need > 0
+              ? `${gp.pts.length}번째 점을 찍었습니다 — 다음 점을 찍으세요 (Esc로 취소)`
+              : `${gp.pts.length}개 찍었습니다 — 계속 클릭하거나 Esc로 끝내세요`,
+          );
       }
     }
     downPos = null;
@@ -2986,8 +3008,12 @@ compareModal.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (groundPick) {
-    groundPick.resolve(null);
-    setStatus("점 찍기를 취소했습니다.");
+    // 개수 제한 없는 모드(가로수 심기)는 Esc가 "끝" — 찍은 점까지 반영
+    if (groundPick.need === 0 && groundPick.pts.length) groundPick.resolve(groundPick.pts);
+    else {
+      groundPick.resolve(null);
+      setStatus("점 찍기를 취소했습니다.");
+    }
   }
   if (!floorsModal.hidden) floorsModal.hidden = true;
   if (!compareModal.hidden) compareModal.hidden = true;
@@ -3282,6 +3308,7 @@ const analysisCtx: AnalysisContext = {
   },
   sceneOrigin: () => sceneOrigin,
   pickGroundPoints: (n, prompt, onPoint) => pickGroundPoints(n, prompt, onPoint),
+  commitHistory: () => commitHistory(),
   async saveFile(blob, filename, description, accept) {
     const picked = await saveToDesktop(blob, filename, description, accept);
     if (picked === "cancelled") {

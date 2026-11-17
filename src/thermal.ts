@@ -15,6 +15,7 @@ import {
 import { yieldToEventLoop } from "./pv";
 import { sunSamples } from "./sun";
 import type { Project } from "./types";
+import { streetCasters } from "./streetscape";
 import { computeWindField, sampleWind, windDirLabel, type WindRoseData, type WindRoseStats } from "./wind";
 
 /**
@@ -82,7 +83,7 @@ export function seasonPrevailing(rose: WindRoseData, months: number[]): number {
 export async function runThermal(
   project: Project,
   rose: WindRoseData,
-  opts: { cell: number; refHeightM: number },
+  opts: { cell: number; refHeightM: number; elevate?: (x: number, y: number) => number },
   onProgress: (pct: number) => void,
 ): Promise<ThermalResult> {
   const { site, buildings } = project;
@@ -101,7 +102,8 @@ export async function runThermal(
   const n = grid.nx * grid.ny;
   const target = siteO ? polygonMask(grid, sites) : new Uint8Array(n).fill(1);
   const inside = insideMask(grid, buildings);
-  const casters = shadowCasters(buildings);
+  // 건물 + 차양·가로수 그림자 (여름 그늘에 큰 몫)
+  const casters = [...shadowCasters(buildings), ...streetCasters(project, opts.elevate)];
   const year = project.analysis.date.slice(0, 4);
 
   const frac = (date: string, a: number, b: number): Float32Array => {
@@ -109,7 +111,7 @@ export async function runThermal(
     const shade = new Float32Array(n);
     const mask = new Uint8Array(n);
     for (const s of samples) {
-      shadowMask(grid, casters, s.dir, mask);
+      shadowMask(grid, casters, s.dir, mask, opts.elevate);
       for (let k = 0; k < n; k++) shade[k] += mask[k];
     }
     for (let k = 0; k < n; k++) shade[k] /= samples.length;
@@ -166,14 +168,20 @@ export function createThermalModule(ctx: AnalysisContext): AnalysisModule {
     settingsHtml: `
       <div class="row"><label for="thermal-cell">격자(m)</label>
         <input type="number" id="thermal-cell" value="3" min="1" max="8" step="1" /></div>
-      <p class="hint">풍향은 바람길 섹션의 기상데이터(여름 6~8월·겨울 12~2월 주풍향), 2.5D 기준 높이도 바람길 설정을 씁니다.
+      <p class="hint">그늘은 건물·차양·가로수(그늘보행권에서 배치)를 모두 넣고 지형 높이차를 반영합니다.
+      풍향은 바람길 섹션의 기상데이터(여름 6~8월·겨울 12~2월 주풍향), 2.5D 기준 높이도 바람길 설정을 씁니다.
       대지경계(SITE_BOUNDARY) 안 외부공간만 봅니다.</p>`,
     async run(onProgress) {
       const loadRose = ctx.extras.loadWindRose as (() => Promise<WindRoseData>) | undefined;
       if (!loadRose) throw new Error("기상데이터를 불러올 수 없습니다");
       const rose = await loadRose();
       const refH = (ctx.extras.windRefHeight as (() => number) | undefined)?.() ?? 20;
-      result = await runThermal(ctx.project, rose, { cell: numInput("thermal-cell", 3, 1, 8), refHeightM: refH }, onProgress);
+      result = await runThermal(
+        ctx.project,
+        rose,
+        { cell: numInput("thermal-cell", 3, 1, 8), refHeightM: refH, elevate: ctx.elevate() },
+        onProgress,
+      );
       const r = result;
       const col = order.map((c) => new THREE.Color(COMFORT_COLOR[c]));
       overlay = gridHeatmap(r.grid, (k) => (r.cls[k] >= 0 ? col[r.cls[k]] : null), ctx.elevate(), 0.22, 0.8, ctx.surface?.());

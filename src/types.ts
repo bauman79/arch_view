@@ -234,6 +234,18 @@ export interface Canopy {
   height: number;
 }
 
+/** 가로수 — 수관을 지하고~수고 사이의 원기둥(8각)으로 본다 (그늘 계산은 불투명 가정) */
+export interface Tree {
+  id: string;
+  p: Point2;
+  /** 수관 반경 (m) */
+  radius: number;
+  /** 수고 (m) */
+  height: number;
+  /** 지하고 — 수관 아래 끝 높이 (m) */
+  crownBase: number;
+}
+
 export interface Project {
   site: Site;
   /** 현재 장면(3D 뷰·분석 대상)에 배치된 건물 — buildingLibrary에서 골라 인스턴스화된 것들 */
@@ -256,6 +268,8 @@ export interface Project {
   savedViews: SavedView[];
   /** 가로 차양 — 그늘보행권 시뮬레이션에 그림자로 들어간다 */
   canopies: Canopy[];
+  /** 가로수 */
+  trees: Tree[];
 }
 
 export function buildingHeight(b: Building): number {
@@ -290,6 +304,7 @@ export function defaultProject(): Project {
     buildingLibrary: [],
     savedViews: [],
     canopies: [],
+    trees: [],
     analysis: {
       gridSize: 1.0,
       date: "2026-12-21",

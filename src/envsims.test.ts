@@ -83,3 +83,26 @@ describe("그늘보행권 — 차양", () => {
     for (const w of under) expect(w.canopy).toBeGreaterThan(0.5);
   });
 });
+
+describe("가로수", () => {
+  it("줄 심기 — 양 끝 포함 간격대로", async () => {
+    const { treeLine } = await import("./streetscape");
+    const pts = treeLine({ x: 0, y: 0 }, { x: 40, y: 0 }, 8);
+    expect(pts).toHaveLength(6);
+    expect(pts[5]).toEqual({ x: 40, y: 0 });
+  });
+
+  it("보도 옆 가로수가 그늘 보행 비율을 올린다", async () => {
+    const tower = mkBuilding("T", "계획주동", rect(500, 500, 510, 510), 2);
+    const p = mkProject([tower]);
+    p.siteOverlays = [{ layer: "ROAD_CL", closed: false, points: [{ x: 400, y: 400 }, { x: 600, y: 400 }] }];
+    const base = { date: "2026-08-01", startMin: 660, endMin: 960, radius: 200, threshold: 0.5, halfWidth: 5 };
+    const { treeLine } = await import("./streetscape");
+    const trees = treeLine({ x: 470, y: 406 }, { x: 530, y: 406 }, 6).map((q, i) => ({
+      id: `t:${i}`, p: q, radius: 3, height: 8, crownBase: 2.5,
+    }));
+    const r = await runShadeWalk(p, { ...base, trees }, () => {});
+    expect(r.treeCount).toBe(trees.length);
+    expect(r.ratioCanopy).toBeGreaterThan(r.ratioAfter);
+  });
+});

@@ -23,6 +23,8 @@ export function sitePolygons(overlays: OverlayLine[]): Point2[][] {
 export interface ShadowCaster {
   id: string;
   fp: Point2[];
+  /** 지반고 (m) — 지형 반영 시 높이 기준. 없으면 0 */
+  gl?: number;
   /** 필로티 높이 (그림자 하단) */
   base: number;
   height: number;
@@ -45,7 +47,7 @@ export function shadowCasters(buildings: Building[]): ShadowCaster[] {
       minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
       maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
     }
-    out.push({ id: b.id, fp, base, height: H, minX, minY, maxX, maxY });
+    out.push({ id: b.id, fp, base, height: H, minX, minY, maxX, maxY, gl: b.terrainElevation ?? 0 });
   }
   return out;
 }
@@ -99,11 +101,27 @@ export function segmentHitsPolygon(ax: number, ay: number, bx: number, by: numbe
   return false;
 }
 
-/** 지점 하나가 그림자 속인가 */
-export function pointShaded(x: number, y: number, casters: ShadowCaster[], sun: { dx: number; dy: number; tan: number }): boolean {
+/**
+ * 지점 하나가 그림자 속인가.
+ * @param zr 지점의 지반고 — 주면 각 장애물의 지반고(gl)와 비교해 경사지 높이차를 반영한다
+ *   (태양 쪽으로 r만큼 가면 시선 높이가 zr + r·tanα). 없으면 평지(각자 자기 지반 기준).
+ */
+export function pointShaded(
+  x: number,
+  y: number,
+  casters: ShadowCaster[],
+  sun: { dx: number; dy: number; tan: number },
+  zr?: number,
+): boolean {
   for (const c of casters) {
-    const r0 = c.base / sun.tan;
-    const r1 = c.height / sun.tan;
+    let r0 = c.base / sun.tan;
+    let r1 = c.height / sun.tan;
+    if (zr !== undefined) {
+      const g = c.gl ?? 0;
+      r0 = Math.max(0, (g + c.base - zr) / sun.tan);
+      r1 = (g + c.height - zr) / sun.tan;
+      if (r1 <= 0) continue;
+    }
     const ax = x + sun.dx * r0, ay = y + sun.dy * r0;
     const bx = x + sun.dx * r1, by = y + sun.dy * r1;
     if (Math.max(ax, bx) < c.minX || Math.min(ax, bx) > c.maxX) continue;
@@ -149,7 +167,13 @@ export function fillPolygon(g: GroundGrid, mask: Uint8Array, pts: Point2[], valu
  * r0~r1만큼 민 자취(민코프스키 합) = 시작·끝 위치의 footprint + 변마다 쓸고 간 사각형.
  * 각각을 행 단위로 채운다. 건물 내부 셀도 1이 될 수 있어 통계에서는 insideMask로 뺀다.
  */
-export function shadowMask(g: GroundGrid, casters: ShadowCaster[], dir: THREE.Vector3 | null, out?: Uint8Array): Uint8Array {
+export function shadowMask(
+  g: GroundGrid,
+  casters: ShadowCaster[],
+  dir: THREE.Vector3 | null,
+  out?: Uint8Array,
+  elevate?: (x: number, y: number) => number,
+): Uint8Array {
   const mask = out ?? new Uint8Array(g.nx * g.ny);
   mask.fill(0);
   const sun = dir ? sunPlan(dir) : null;
@@ -158,8 +182,22 @@ export function shadowMask(g: GroundGrid, casters: ShadowCaster[], dir: THREE.Ve
     return mask;
   }
   for (const c of casters) {
-    const r0 = c.base / sun.tan;
-    const r1 = c.height / sun.tan;
+    let r0 = c.base / sun.tan;
+    let r1 = c.height / sun.tan;
+    if (elevate) {
+      // 지형 반영(근사) — 그림자 끝이 떨어지는 곳의 지반고로 길이를 맞춘다 (두 번 반복)
+      const g0 = c.gl ?? 0;
+      const cx = (c.minX + c.maxX) / 2, cy = (c.minY + c.maxY) / 2;
+      let zr = g0;
+      for (let it = 0; it < 2; it++) {
+        const L = Math.max(0, (g0 + c.height - zr) / sun.tan);
+        zr = elevate(cx - sun.dx * L, cy - sun.dy * L);
+      }
+      zr = Math.min(zr, g0 + c.height - 0.01);
+      // 그림자 시작(건물 바로 뒤)은 건물 지반 기준, 끝(길이)만 떨어지는 곳 지반 기준
+      r0 = c.base / sun.tan;
+      r1 = Math.max(r0, (g0 + c.height - zr) / sun.tan);
+    }
     const ax = -sun.dx * r0, ay = -sun.dy * r0;
     const bx = -sun.dx * r1, by = -sun.dy * r1;
     const fp = c.fp;

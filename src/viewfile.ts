@@ -1,4 +1,4 @@
-import type { Building, Canopy, OverlayLine, Point2, Point3, Project, SavedView } from "./types";
+import type { Building, Canopy, OverlayLine, Point2, Point3, Project, SavedView, Tree } from "./types";
 
 /**
  * .view 파일 — 작업 중인 프로젝트 전체(장면·라이브러리·오버레이·분석 설정)를
@@ -28,6 +28,7 @@ export interface ViewFileData {
   savedViews?: SavedView[];
   /** 가로 차양 — 없으면(구버전) 빈 목록 */
   canopies?: Canopy[];
+  trees?: Tree[];
 }
 
 export function serializeView(
@@ -49,6 +50,7 @@ export function serializeView(
     terrainPoints: project.terrainPoints,
     savedViews: project.savedViews,
     canopies: project.canopies,
+    trees: project.trees,
   };
   return JSON.stringify(data, null, 1);
 }
@@ -109,6 +111,9 @@ export function deserializeView(text: string): ViewFileData {
       ? d.canopies.filter(
           (c) => c && c.a && c.b && Number.isFinite(c.width) && Number.isFinite(c.height),
         )
+      : [],
+    trees: Array.isArray(d.trees)
+      ? d.trees.filter((t) => t && t.p && Number.isFinite(t.radius) && Number.isFinite(t.height))
       : [],
   };
 }
