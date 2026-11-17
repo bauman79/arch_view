@@ -11,6 +11,7 @@ import { pointInPolygon } from "./geom2d";
 import { yieldToEventLoop } from "./pv";
 import { sunSamples, type SunSample } from "./sun";
 import { buildTerrainModel, nearestPointElevation, sampleElevation } from "./terrain";
+import { drapedMesh, drapePolygon, type DrapeSurface } from "./drape";
 import type { Point2, Project } from "./types";
 
 /**
@@ -334,10 +335,43 @@ const Z_PLUS = new THREE.Vector3(0, 0, 1);
 export function createSunHoursMapOverlay(
   result: SunHoursMapResult,
   showLegal: boolean,
+  surface?: DrapeSurface,
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = "sunhoursmap-overlay";
-  const cells = result.cells;
+  const colorOf = (c: SunHoursMapCell, out: THREE.Color) =>
+    showLegal ? out.copy(c.passContinuous || c.passTotal ? LEGAL_PASS : LEGAL_FAIL) : sunHoursColor(c.hours, out);
+  let cells = result.cells;
+  // 지형이 있으면 지면 셀은 지형 삼각형으로 잘라 정확히 얹는다 (평평한 타일은 경사지에 묻힘)
+  if (surface) {
+    const ground = cells.filter((c) => c.isGround);
+    cells = cells.filter((c) => !c.isGround);
+    const pos: number[] = [];
+    const col: number[] = [];
+    const tmp = new THREE.Color();
+    for (const c of ground) {
+      const hx = (c.w * 0.92) / 2, hy = (c.h * 0.92) / 2;
+      const x = c.pos.x, y = -c.pos.z;
+      const before = pos.length;
+      drapePolygon(surface, [
+        { x: x - hx, y: y - hy }, { x: x + hx, y: y - hy }, { x: x + hx, y: y + hy }, { x: x - hx, y: y + hy },
+      ], 0.12, pos);
+      colorOf(c, tmp);
+      for (let i = before; i < pos.length; i += 3) col.push(tmp.r, tmp.g, tmp.b);
+    }
+    if (pos.length) {
+      group.add(
+        drapedMesh(
+          pos,
+          new THREE.MeshBasicMaterial({
+            vertexColors: true, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide,
+            polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12,
+          }),
+          col,
+        ),
+      );
+    }
+  }
   if (cells.length === 0) return group;
 
   const geom = new THREE.PlaneGeometry(1, 1);
@@ -361,11 +395,7 @@ export function createSunHoursMapOverlay(
     scale.set(c.w * 0.92, c.h * 0.92, 1);
     mtx.compose(pos, quat, scale);
     inst.setMatrixAt(i, mtx);
-    if (showLegal) {
-      inst.setColorAt(i, c.passContinuous || c.passTotal ? LEGAL_PASS : LEGAL_FAIL);
-    } else {
-      inst.setColorAt(i, sunHoursColor(c.hours, color));
-    }
+    inst.setColorAt(i, colorOf(c, color));
   }
   inst.instanceMatrix.needsUpdate = true;
   if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
@@ -376,7 +406,7 @@ export function createSunHoursMapOverlay(
 export function disposeSunHoursMapOverlay(group: THREE.Group): void {
   group.removeFromParent();
   group.traverse((obj) => {
-    if (obj instanceof THREE.InstancedMesh) {
+    if (obj instanceof THREE.Mesh) {
       obj.geometry.dispose();
       (obj.material as THREE.Material).dispose();
     }

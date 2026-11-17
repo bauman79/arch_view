@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { worldFootprint } from "./buildings";
 import { pointInPolygon } from "./geom2d";
+import { drapedMesh, drapePolygon, type DrapeSurface } from "./drape";
 import { buildingHeight, type Building, type OverlayLine, type Point2 } from "./types";
 
 /** 대지경계 다각형 전부 (도면에 여러 조각으로 그려진 경우 모두) */
@@ -279,14 +280,55 @@ export function segmentsToRibbon(
   return new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
 }
 
-/** 지면 셀 히트맵 (값 → 색) — InstancedMesh, 지형 위에 얹음 */
+/**
+ * 지면 셀 히트맵 (값 → 색). 지형 표면(surface)이 있으면 셀을 지형 삼각형으로 잘라
+ * 지형과 같은 면에 얹는다(경사지에서 평평한 타일이 땅에 묻히지 않게).
+ */
 export function gridHeatmap(
   g: GroundGrid,
   colorOf: (k: number) => THREE.Color | null,
   elevate: ((x: number, y: number) => number) | undefined,
   lift = 0.25,
   opacity = 0.8,
-): THREE.InstancedMesh {
+  surface?: DrapeSurface,
+): THREE.Object3D {
+  if (surface) {
+    const pos: number[] = [];
+    const col: number[] = [];
+    const h = g.cell / 2;
+    for (let k = 0; k < g.nx * g.ny; k++) {
+      const c = colorOf(k);
+      if (!c) continue;
+      const p = cellCenter(g, k % g.nx, Math.floor(k / g.nx));
+      const before = pos.length;
+      drapePolygon(
+        surface,
+        [
+          { x: p.x - h, y: p.y - h },
+          { x: p.x + h, y: p.y - h },
+          { x: p.x + h, y: p.y + h },
+          { x: p.x - h, y: p.y + h },
+        ],
+        0.12,
+        pos,
+      );
+      for (let i = before; i < pos.length; i += 3) col.push(c.r, c.g, c.b);
+    }
+    return drapedMesh(
+      pos,
+      new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        transparent: opacity < 1,
+        opacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -6,
+        polygonOffsetUnits: -12,
+      }),
+      col,
+    );
+  }
   const idx: number[] = [];
   const cols: THREE.Color[] = [];
   for (let k = 0; k < g.nx * g.ny; k++) {

@@ -176,7 +176,7 @@ export function createThermalModule(ctx: AnalysisContext): AnalysisModule {
       result = await runThermal(ctx.project, rose, { cell: numInput("thermal-cell", 3, 1, 8), refHeightM: refH }, onProgress);
       const r = result;
       const col = order.map((c) => new THREE.Color(COMFORT_COLOR[c]));
-      overlay = gridHeatmap(r.grid, (k) => (r.cls[k] >= 0 ? col[r.cls[k]] : null), ctx.elevate(), 0.22, 0.75);
+      overlay = gridHeatmap(r.grid, (k) => (r.cls[k] >= 0 ? col[r.cls[k]] : null), ctx.elevate(), 0.22, 0.8, ctx.surface?.());
       overlay.name = "thermal";
       ctx.viewer.scene.add(overlay);
       return `외부공간 열쾌적성 — 사계절 쾌적 ${pct(r.area.both, total())} · 불리 ${pct(r.area.poor, total())}`;

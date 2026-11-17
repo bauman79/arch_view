@@ -582,3 +582,26 @@ function createSteppedTerrain(
   group.add(mesh, lines);
   return group;
 }
+
+// ---------- 표면 얹기용 삼각형 (drape.ts) ----------
+
+/**
+ * 지형 표면 삼각형 (x, y, z ×3) — 매끈한 TIN이면 TIN 그대로, 계단식이면 단 판(평평한 조각).
+ * 바닥 표시(대지·도로 채움, 분석 히트맵)를 이 삼각형으로 잘라 얹으면 지형과 같은 면에 놓인다.
+ */
+export function surfaceTriangles(model: TerrainModel, stepped: boolean): Float64Array {
+  if (stepped) {
+    const levels = contourLevels(model);
+    const geo = buildTerraceGeometry(model, Array.from(model.triangles), levels, model.minZ - STEP_BASE_PAD);
+    return Float64Array.from(geo.flats);
+  }
+  const t = model.triangles;
+  const out = new Float64Array(t.length * 3);
+  for (let i = 0; i < t.length; i++) {
+    const p = model.points[t[i]];
+    out[i * 3] = p.x;
+    out[i * 3 + 1] = p.y;
+    out[i * 3 + 2] = p.z;
+  }
+  return out;
+}

@@ -29,6 +29,8 @@ export interface Silhouette {
 export interface ElevationResult {
   side: Side;
   shapes: Silhouette[];
+  /** 지형 실루엣 (입면 방향으로 본 지반 최고선) — 지형이 없으면 빈 배열 */
+  terrain: { u: number; z: number }[];
   siteU: [number, number] | null;
   coverRatio: number;
   coveredM: number;
@@ -63,7 +65,11 @@ export function unionLength(iv: [number, number][]): number {
   return total;
 }
 
-export function computeElevation(project: Project, side: Side): ElevationResult {
+export function computeElevation(
+  project: Project,
+  side: Side,
+  elevate?: (x: number, y: number) => number,
+): ElevationResult {
   const f = facing(side, project.site.northAngle);
   const right = { x: f.y, y: -f.x };
   const shapes: Silhouette[] = [];
@@ -102,9 +108,43 @@ export function computeElevation(project: Project, side: Side): ElevationResult 
     if (i > 0 && Math.abs(h - prev) > 3) changes++;
     prev = h;
   }
+  // 지형 실루엣 — 계획동이 있는 깊이 범위(±20m) 안에서 u마다 가장 높은 지반
+  const terrain: { u: number; z: number }[] = [];
+  if (elevate && plans.length) {
+    const ref = plans;
+    let du0 = Infinity, du1 = -Infinity;
+    for (const b of project.buildings.filter((x) => x.type === "계획주동")) {
+      for (const p of worldFootprint(b)) {
+        const d = p.x * f.x + p.y * f.y;
+        du0 = Math.min(du0, d);
+        du1 = Math.max(du1, d);
+      }
+    }
+    du0 -= 20;
+    du1 += 20;
+    let ua = Math.min(...ref.map((s) => s.u0)), ub = Math.max(...ref.map((s) => s.u1));
+    if (siteU) {
+      ua = Math.min(ua, siteU[0]);
+      ub = Math.max(ub, siteU[1]);
+    }
+    ua -= 40;
+    ub += 40;
+    const stepU = Math.max(1, (ub - ua) / 300);
+    const stepD = Math.max(2, (du1 - du0) / 60);
+    for (let u = ua; u <= ub + 1e-9; u += stepU) {
+      let zmax = -Infinity;
+      for (let d = du0; d <= du1 + 1e-9; d += stepD) {
+        const x = u * right.x + d * f.x;
+        const y = u * right.y + d * f.y;
+        zmax = Math.max(zmax, elevate(x, y));
+      }
+      terrain.push({ u, z: zmax });
+    }
+  }
   return {
     side,
     shapes,
+    terrain,
     siteU,
     coverRatio: widthM > 0 ? Math.min(1, coveredM / widthM) : 0,
     coveredM,
@@ -135,8 +175,10 @@ export function elevationSvg(r: ElevationResult, showAdj: boolean): string {
   u0 -= pad;
   u1 += pad;
   const vis = shapes.filter((s) => s.u1 > u0 && s.u0 < u1);
-  const z0 = Math.min(...vis.map((s) => s.base));
-  const z1 = Math.max(...vis.map((s) => s.top), 10) + 15;
+  const tz = r.terrain.filter((t) => t.u >= u0 && t.u <= u1);
+  const zGround = Math.min(...vis.map((s) => s.base), ...(tz.length ? tz.map((t) => t.z) : []));
+  const z0 = zGround - (tz.length ? 8 : 0); // 지반 아래 단면 두께
+  const z1 = Math.max(...vis.map((s) => s.top), zGround + 10) + 15;
   const W = 860;
   const sc = W / (u1 - u0);
   const H = Math.max(160, (z1 - z0) * sc);
@@ -144,15 +186,28 @@ export function elevationSvg(r: ElevationResult, showAdj: boolean): string {
   const Y = (z: number) => H - (z - z0) * sc;
   // 먼 것부터 그려 가까운 동이 앞에 오게
   const ordered = [...vis].sort((a, b) => b.depth - a.depth);
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H + 24}" width="100%" style="background:#f8fafc">`;
-  svg += `<line x1="0" y1="${Y(z0)}" x2="${W}" y2="${Y(z0)}" stroke="#64748b" stroke-width="1"/>`;
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H + 24}" width="100%" style="background:#ffffff">`;
+  // 표고 눈금 (10m 간격)
+  for (let z = Math.ceil(z0 / 10) * 10; z <= z1; z += 10) {
+    svg += `<line x1="0" y1="${Y(z).toFixed(1)}" x2="${W}" y2="${Y(z).toFixed(1)}" stroke="#e2e8f0" stroke-width="0.6"/>`;
+    svg += `<text x="${W - 2}" y="${(Y(z) - 2).toFixed(1)}" font-size="9" fill="#94a3b8" text-anchor="end">EL ${z}</text>`;
+  }
+  if (tz.length <= 1) {
+    svg += `<line x1="0" y1="${Y(z0)}" x2="${W}" y2="${Y(z0)}" stroke="#64748b" stroke-width="1"/>`;
+  }
   if (r.siteU) {
-    svg += `<rect x="${X(r.siteU[0])}" y="${Y(z0)}" width="${(r.siteU[1] - r.siteU[0]) * sc}" height="4" fill="#ef4444" opacity="0.6"/>`;
+    svg += `<rect x="${X(r.siteU[0])}" y="${H - 4}" width="${(r.siteU[1] - r.siteU[0]) * sc}" height="4" fill="#ef4444" opacity="0.6"/>`;
   }
   for (const s of ordered) {
     svg +=
       `<rect x="${X(s.u0).toFixed(1)}" y="${Y(s.top).toFixed(1)}" width="${((s.u1 - s.u0) * sc).toFixed(1)}" height="${((s.top - s.base) * sc).toFixed(1)}" ` +
       `fill="${s.plan ? "#e0a030" : "#cbd5e1"}" stroke="${s.plan ? "#92400e" : "#64748b"}" stroke-width="0.8"><title>${esc(s.name)} ${(s.top - s.base).toFixed(1)}m</title></rect>`;
+  }
+  // 지형 단면 — 건물 뒤가 아니라 앞에 그려, 앞쪽 지반이 건물 하부를 가리는 입면 관례대로
+  if (tz.length > 1) {
+    const top = tz.map((t) => `${X(t.u).toFixed(1)},${Y(t.z).toFixed(1)}`).join(" ");
+    svg += `<polygon points="${X(tz[0].u).toFixed(1)},${H} ${top} ${X(tz[tz.length - 1].u).toFixed(1)},${H}" fill="#4b5563"/>`;
+    svg += `<polyline points="${top}" fill="none" stroke="#111827" stroke-width="1.6"/>`;
   }
   // 최고 높이선
   if (plans.length) {
@@ -164,7 +219,7 @@ export function elevationSvg(r: ElevationResult, showAdj: boolean): string {
   const bar = 50 * sc;
   svg += `<line x1="${W - bar - 10}" y1="${H + 14}" x2="${W - 10}" y2="${H + 14}" stroke="#334155" stroke-width="2"/>`;
   svg += `<text x="${W - bar - 10}" y="${H + 10}" font-size="10" fill="#334155">50m</text>`;
-  svg += `<text x="4" y="${H + 18}" font-size="11" fill="#334155">${SIDE_LABEL[r.side]} 입면 · 주황=계획주동 · 회색=인접건물 · 빨간 띠=대지 폭</text>`;
+  svg += `<text x="4" y="${H + 18}" font-size="11" fill="#334155">${SIDE_LABEL[r.side]} 입면 · 주황=계획주동 · 회색=인접건물 · 짙은 회색=지반 · 빨간 띠=대지 폭</text>`;
   svg += `</svg>`;
   return svg;
 }
@@ -252,7 +307,8 @@ export function createSkylineModule(ctx: AnalysisContext): AnalysisModule {
     ],
     async run() {
       if (!ctx.project.buildings.some((b) => b.type === "계획주동")) throw new Error("계획주동이 없습니다");
-      results = SIDES.map((s) => computeElevation(ctx.project, s));
+      const elev = ctx.elevate();
+      results = SIDES.map((s) => computeElevation(ctx.project, s, elev));
       showElevationModal(results, "south");
       const worst = [...results].sort((a, b) => b.coverRatio - a.coverRatio)[0];
       return `입면 분석 — 차폐율 최대 ${SIDE_LABEL[worst.side]} ${pct(worst.coverRatio, 1)}`;

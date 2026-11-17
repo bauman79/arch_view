@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { drapedMesh, drapePolygon, type DrapeSurface } from "./drape";
 import Delaunator from "delaunator";
 import { pointInPolygon, signedArea } from "./geom2d";
 import { buildingHeight, type Building, type OverlayLine, type Point2 } from "./types";
@@ -62,6 +63,7 @@ const DRAPE_LIFT_M = 0.15;
 export function createOverlayGroup(
   overlays: OverlayLine[],
   elevate?: (x: number, y: number) => number,
+  surface?: DrapeSurface,
 ): THREE.Group {
   const group = new THREE.Group();
   const y = 0.05;
@@ -69,14 +71,20 @@ export function createOverlayGroup(
   for (const o of overlays) {
     if (o.layer === "SITE_BOUNDARY" && !containsOtherSite(o, sites)) {
       // 평지면 회색 채움, 지형이 있으면 지형면을 따라 얹은 색 채움으로 대상지를 구분한다
-      const fill = elevate ? createDrapedSiteFill(o, elevate) : createSiteFill(o);
+      const fill = surface
+        ? exactDrapeFill(o, surface, SITE_DRAPE_COLOR, "site-drape", 0.06, -4)
+        : elevate
+          ? createDrapedSiteFill(o, elevate)
+          : createSiteFill(o);
       if (fill) group.add(fill);
     }
     if (o.layer === "ROAD_AREA" && o.closed && o.points.length >= 3) {
       // 도로는 대상지 채움보다 한 단계 아래 깊이로 — 겹치면 대상지가 위에 보이게
-      const fill = elevate
-        ? createDrapedSiteFill(o, elevate, ROAD_FILL_COLOR, "road-drape", -1)
-        : createSiteFill(o, ROAD_FILL_COLOR, "road-fill", -3);
+      const fill = surface
+        ? exactDrapeFill(o, surface, ROAD_FILL_COLOR, "road-drape", 0.03, -3)
+        : elevate
+          ? createDrapedSiteFill(o, elevate, ROAD_FILL_COLOR, "road-drape", -1)
+          : createSiteFill(o, ROAD_FILL_COLOR, "road-fill", -3);
       if (fill) group.add(fill);
     }
     const src = o.closed ? [...o.points, o.points[0]] : o.points;
@@ -107,6 +115,32 @@ export function createOverlayGroup(
     group.add(line);
   }
   return group;
+}
+
+/** 지형 삼각형으로 정확히 잘라 얹은 채움 — 지형과 같은 면이라 얼룩이 없다 */
+function exactDrapeFill(
+  o: OverlayLine,
+  surface: DrapeSurface,
+  color: number,
+  name: string,
+  lift: number,
+  offset: number,
+): THREE.Mesh | null {
+  const pos = drapePolygon(surface, o.points, lift);
+  if (pos.length === 0) return null;
+  const mesh = drapedMesh(
+    pos,
+    new THREE.MeshLambertMaterial({
+      color,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: offset,
+      polygonOffsetUnits: offset * 2,
+    }),
+  );
+  mesh.receiveShadow = true;
+  mesh.name = name;
+  return mesh;
 }
 
 /**

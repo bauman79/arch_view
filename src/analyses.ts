@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { DrapeSurface } from "./drape";
 import type { LegendItem } from "./legend";
 import type { Project } from "./types";
 import type { Viewer } from "./viewer";
@@ -16,6 +17,8 @@ export interface AnalysisContext {
   viewer: Viewer;
   /** (x,y DXF) → 지형 고도. 지형이 없으면 undefined */
   elevate(): ElevateFn;
+  /** 지형 표면 삼각형 — 바닥 히트맵을 지형에 정확히 얹을 때. 지형 없으면 undefined */
+  surface?(): DrapeSurface | undefined;
   setStatus(msg: string): void;
   /** 결과가 생기거나 지워졌을 때 — 범례·결과판 갱신 */
   changed(): void;

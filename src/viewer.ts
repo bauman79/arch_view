@@ -61,7 +61,7 @@ export class Viewer {
     this.camera = new THREE.PerspectiveCamera(
       50,
       container.clientWidth / container.clientHeight,
-      0.1,
+      1,
       5000,
     );
     this.camera.position.set(80, 90, 120);
@@ -76,6 +76,7 @@ export class Viewer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.1;
+    this.controls.minDistance = 4; // 근접 한계(near)보다 충분히 멀게
     this.controls.maxPolarAngle = Math.PI / 2 - 0.02; // 지면 아래로 안 내려가게
 
     // 태양 직사광 — M2: setSun(방향벡터)으로 시간대별 갱신
@@ -89,7 +90,9 @@ export class Viewer {
     cam.bottom = -250;
     cam.near = 1;
     cam.far = 1500;
-    this.sunLight.shadow.bias = -0.0005;
+    // 그림자가 자기 면에 줄무늬로 맺히는 현상(shadow acne) 방지 — normalBias는 장면 크기에 맞춰 갱신
+    this.sunLight.shadow.bias = -0.0002;
+    this.sunLight.shadow.normalBias = 0.25;
     this.sunLight.position.set(60, 120, 100); // 초기값 — 남측 상공
     this.scene.add(this.sunLight, this.sunLight.target);
 
@@ -204,10 +207,15 @@ export class Viewer {
     if (this.sunLight.position.lengthSq() > 0) {
       this.sunLight.position.setLength(this.sunDistance);
     }
+    // 그림자 맵 텍셀 크기에 비례한 법선 오프셋 — 넓은 장면일수록 텍셀이 커서 줄무늬가 잘 생긴다
+    this.sunLight.shadow.normalBias = Math.max(0.15, ((2 * half) / want) * 1.5);
     const fog = this.scene.fog as THREE.Fog;
     fog.near = Math.max(600, radius * 2.5);
     fog.far = Math.max(1600, radius * 8);
     this.camera.far = Math.max(5000, radius * 12);
+    // 근접 한계를 키워 깊이 정밀도 확보 — 0.1m면 500m 거리에서 정밀도가 15cm라
+    // 지형 위 채움·히트맵이 지형과 겹쳐 지글거린다. 1km 장면도 1~2m면 충분히 가깝게 볼 수 있다.
+    this.camera.near = Math.min(2, Math.max(0.5, radius / 400));
     this.camera.updateProjectionMatrix();
   }
 

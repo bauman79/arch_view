@@ -26,6 +26,7 @@ import {
   quantizeToLevel,
   sampleElevation,
   terrainElevationForFootprint,
+  surfaceTriangles,
   type TerrainModel,
 } from "./terrain";
 import { createDaylightOverlay, runDaylightCheck, type DaylightResult } from "./daylight";
@@ -122,6 +123,7 @@ import {
   type BoardItem,
 } from "./analyses";
 import { renderResultBoard } from "./resultboard";
+import { makeSurface, type DrapeSurface } from "./drape";
 import { diagnoseDxfText, diagnosisHtml } from "./dxfdiag";
 import { createUnitSunModule } from "./unitsun";
 import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
@@ -295,6 +297,17 @@ function applyTerrainVisibility(): void {
  * 지형 고도 샘플러 — 지형 없으면 null. 검토선·히트맵·유선을 지형 표면 위에 얹는
  * 표시 전용 공용 헬퍼 (법적 판정·시뮬레이션 계산에는 쓰지 않는다).
  */
+/** 지형 표면 삼각형 (바닥 표시를 지형에 정확히 얹는 용도) — 지형·계단식 상태별 캐시 */
+let drapeCache: { model: TerrainModel; stepped: boolean; s: DrapeSurface } | null = null;
+function drapeSurface(): DrapeSurface | undefined {
+  const tm = terrainModel;
+  if (!tm) return undefined;
+  if (!drapeCache || drapeCache.model !== tm || drapeCache.stepped !== terrainStepped) {
+    drapeCache = { model: tm, stepped: terrainStepped, s: makeSurface(surfaceTriangles(tm, terrainStepped)) };
+  }
+  return drapeCache.s;
+}
+
 function terrainSampler(): ((x: number, y: number) => number) | undefined {
   const tm = terrainModel;
   if (!tm) return undefined;
@@ -733,7 +746,11 @@ function rebuildOverlays(): void {
   viewer.overlaysRoot.clear();
   // 지형이 보이면 선을 지형 표면에 얹는다 — 고정 높이면 15~30m 지형 아래에 묻힌다
   viewer.overlaysRoot.add(
-    createOverlayGroup(project.siteOverlays, terrainVisible ? terrainSampler() : undefined),
+    createOverlayGroup(
+      project.siteOverlays,
+      terrainVisible ? terrainSampler() : undefined,
+      terrainVisible ? drapeSurface() : undefined,
+    ),
   );
   applyTerrainVisibility(); // 새로 만든 site-fill에 지형 표시 상태(채움 숨김) 재적용
 }
@@ -1676,7 +1693,11 @@ const runSunMapBtn = document.getElementById("run-sunhoursmap") as HTMLButtonEle
 function showSunHoursMapOverlay(): void {
   clearSunHoursMapOverlay();
   if (!lastSunHoursMap) return;
-  sunHoursMapGroup = createSunHoursMapOverlay(lastSunHoursMap, sunMapLegalCheckbox.checked);
+  sunHoursMapGroup = createSunHoursMapOverlay(
+    lastSunHoursMap,
+    sunMapLegalCheckbox.checked,
+    terrainVisible ? drapeSurface() : undefined,
+  );
   viewer.scene.add(sunHoursMapGroup);
 }
 
@@ -2842,6 +2863,7 @@ const analysisCtx: AnalysisContext = {
   project,
   viewer,
   elevate: () => terrainSampler(),
+  surface: () => (terrainVisible ? drapeSurface() : undefined),
   setStatus,
   changed: () => updateLegends(),
   flyTo: (p, d) => flyToPoint(p, d),
