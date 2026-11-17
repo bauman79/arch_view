@@ -104,12 +104,28 @@ export function drawLegendsOnCanvas(
   const pad = 10 * s;
   const font = (px: number, bold = false) =>
     `${bold ? "600 " : ""}${px * s}px -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif`;
+  // 긴 주석은 줄바꿈 — 폭에 맞춰 글자 단위로 자른다
+  const iwPx = W - pad * 2;
+  const wrap = (text: string): string[] => {
+    ctx.font = font(10);
+    const lines: string[] = [];
+    let cur = "";
+    for (const ch of text) {
+      if (ctx.measureText(cur + ch).width > iwPx && cur) {
+        lines.push(cur);
+        cur = ch.trimStart();
+      } else cur += ch;
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  };
+  const notes = items.map((it) => (it.note ? wrap(it.note) : []));
   // 높이 먼저 계산
-  const heights = items.map((it) => {
+  const heights = items.map((it, i) => {
     let h = 16; // 제목
     if (it.kind === "swatches") h += Math.ceil(it.items.length / 2) * 16;
     else h += 12 + 16;
-    if (it.note) h += 15;
+    h += notes[i].length * 13;
     return h * s;
   });
   const gap = 8 * s;
@@ -159,10 +175,10 @@ export function drawLegendsOnCanvas(
       }
       yy += 16 * s;
     }
-    if (it.note) {
+    if (notes[n].length) {
       ctx.fillStyle = "#94a3b8";
       ctx.font = font(10);
-      ctx.fillText(it.note, ix, yy, iw);
+      notes[n].forEach((ln, k) => ctx.fillText(ln, ix, yy + k * 13 * s));
     }
     y += heights[n] + gap;
   });

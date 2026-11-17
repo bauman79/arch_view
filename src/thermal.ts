@@ -32,10 +32,10 @@ import { computeWindField, sampleWind, windDirLabel, type WindRoseData, type Win
 export type ComfortClass = "both" | "summer" | "winter" | "poor";
 
 export const COMFORT_LABEL: Record<ComfortClass, string> = {
-  both: "사계절 쾌적",
-  summer: "여름 쾌적(겨울 불리)",
-  winter: "겨울 쾌적(여름 불리)",
-  poor: "불리",
+  both: "사계절 쾌적 (여름 그늘·통풍, 겨울 볕)",
+  summer: "여름만 쾌적 (여름 그늘, 겨울에도 그늘)",
+  winter: "겨울만 쾌적 (겨울 볕, 여름에도 땡볕)",
+  poor: "불리 (여름 땡볕, 겨울 그늘·찬바람)",
 };
 
 export const COMFORT_COLOR: Record<ComfortClass, number> = {
@@ -217,7 +217,9 @@ export function createThermalModule(ctx: AnalysisContext): AnalysisModule {
             color: "#" + COMFORT_COLOR[c].toString(16).padStart(6, "0"),
             label: `${COMFORT_LABEL[c].replace(/\(.*\)/, "")} ${pct(r.area[c], total())}`,
           })),
-          note: `여름: 8/1 12~16시 그늘+${windDirLabel(r.summerDir)}풍 · 겨울: 동지 10~14시 볕+${windDirLabel(r.winterDir)}풍 차단`,
+          note:
+            `불리 = 여름엔 볕이 들고 겨울엔 그늘지거나 찬바람 맞는 곳(주로 건물 북측 — 동지엔 해가 낮아 그늘, 8월엔 해가 높아 볕). ` +
+            `여름: 8/1 12~16시 그늘+${windDirLabel(r.summerDir)}풍 · 겨울: 동지 10~14시 볕+${windDirLabel(r.winterDir)}풍 차단`,
         },
       ];
     },

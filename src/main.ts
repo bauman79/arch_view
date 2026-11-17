@@ -129,8 +129,8 @@ import { renderResultBoard } from "./resultboard";
 import { buildReportHtml, type ReportFigure } from "./report";
 import { makeSurface, type DrapeSurface } from "./drape";
 import { diagnoseDxfText, diagnosisHtml } from "./dxfdiag";
-import { findMaxFloors, legalize, planTypeOf, type MaxFloorResult } from "./maxfloors";
-import { defaultTentOptions, planTent, tentMetrics, unitsPerFloorOf, type TentOptions, type TentResult } from "./tentplan";
+import { findMaxFloors, planTypeOf, violations, type MaxFloorResult } from "./maxfloors";
+import { defaultTentOptions, planTentLegal, unitsPerFloorOf, type TentOptions, type TentResult } from "./tentplan";
 import { yieldToEventLoop } from "./pv";
 import { createUnitSunModule } from "./unitsun";
 import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
@@ -1104,6 +1104,12 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
     edgeRadius: num("tp-radius", 100),
     shape: num("tp-shape", 1),
     areaPerUnit: num("tp-apu", 110),
+    northWeight: num("tp-north", 0.5),
+    towerMinArea: num("tp-tarea", 400),
+    towerMaxAspect: num("tp-tasp", 1.4),
+    slabRatio: num("tp-slab", 60) / 100,
+    tierStep: num("tp-tier", 5),
+    allowRelax: (document.getElementById("tp-relax") as HTMLInputElement).checked,
   };
   if (o.minFloors > o.maxFloors) o.minFloors = o.maxFloors;
   syncSetbackRules();
@@ -1111,59 +1117,33 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
   const runBtn = document.getElementById("tp-run") as HTMLButtonElement;
   runBtn.disabled = true;
   try {
-    // 1) 법규 최대 층수 (복제본에서)
-    const sim = { ...project, buildings: structuredClone(project.buildings) } as typeof project;
-    const legal = await findMaxFloors(
-      sim,
-      plans.map((b) => b.id),
-      o.maxFloors,
-      (d, t) => {
-        out.innerHTML = `<p class="hint">법규 최대 층수 찾는 중… ${Math.round((d / t) * 100)}%</p>`;
+    // 규칙(텐트·남저북고·탑상/판상·단계) → 우선순위 법규 맞춤으로 목표를 채우는 가장 낮은 최고층
+    const res = await planTentLegal(
+      project,
+      o,
+      (msg) => {
+        out.innerHTML = `<p class="hint">${msg}…</p>`;
       },
       yieldToEventLoop,
     );
-    // 2) 텐트형 배분 — 가장자리가 낮으면 가운데 동이 더 올라갈 여유가 생기므로,
-    //    법규로 잘린 동만 (주변은 배분 층수로 둔 채) 다시 최대 층수를 찾아 반복한다
-    const legalMap = new Map(legal.map((r) => [r.id, r.max]));
-    let res = planTent(project, legalMap, o);
-    for (let iter = 0; iter < 3; iter++) {
-      const capped = res.rows.filter((r) => r.capped).map((r) => r.id);
-      if (!capped.length) break;
-      const sim2 = { ...project, buildings: structuredClone(project.buildings) } as typeof project;
+    // 법규로 낮아진 동 — 한 층 더 올리면 무엇에 걸리는지
+    const reasons = new Map<string, number>();
+    {
+      const sim = { ...project, buildings: structuredClone(project.buildings) } as typeof project;
       for (const r of res.rows) {
-        const b = sim2.buildings.find((x) => x.id === r.id);
+        const b = sim.buildings.find((x) => x.id === r.id);
         if (b) b.floors = r.floors;
       }
-      out.innerHTML = `<p class="hint">텐트형에 맞춰 가운데 동 여유 다시 찾는 중… (${iter + 1}/3)</p>`;
-      const again = await findMaxFloors(sim2, capped, o.maxFloors, undefined, yieldToEventLoop);
-      let raised = false;
-      for (const r of again) {
-        if (r.max > (legalMap.get(r.id) ?? 0)) {
-          legalMap.set(r.id, r.max);
-          raised = true;
-        }
+      const plansSim = sim.buildings.filter((b) => b.type === "계획주동");
+      for (const r of res.rows.filter((x) => x.capped)) {
+        const b = sim.buildings.find((x) => x.id === r.id)!;
+        const now = new Set(violations(sim, b, plansSim).keys());
+        b.floors += 1;
+        const extra = [...violations(sim, b, plansSim)].filter(([k]) => !now.has(k)).map(([, v]) => v);
+        b.floors -= 1;
+        const why = extra[0] ?? "인동거리";
+        reasons.set(why, (reasons.get(why) ?? 0) + 1);
       }
-      if (!raised) break;
-      res = planTent(project, legalMap, o);
-    }
-    // 3) 최종 배치를 한 번 더 법규 검증 — 동시에 올린 동끼리 새로 걸리면 한 층씩 내림
-    const sim3 = { ...project, buildings: structuredClone(project.buildings) } as typeof project;
-    for (const r of res.rows) {
-      const b = sim3.buildings.find((x) => x.id === r.id);
-      if (b) b.floors = r.floors;
-    }
-    out.innerHTML = `<p class="hint">최종 배치 법규 검증 중…</p>`;
-    const fixed = await legalize(sim3, res.rows.map((r) => r.id), yieldToEventLoop);
-    if (fixed.size) {
-      for (const r of res.rows) {
-        const f = fixed.get(r.id);
-        if (f !== undefined) {
-          r.floors = f;
-          r.capped = true;
-        }
-      }
-      const m = tentMetrics(project, new Map(res.rows.map((r) => [r.id, r.floors])), o);
-      res = { ...res, ...m, peak: Math.max(...res.rows.map((r) => r.floors)) };
     }
     tpPending = res;
     tpGfa = { retailM2: o.retailM2, amenityPerUnit: o.amenityPerUnit };
@@ -1171,25 +1151,17 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
     // 목표 미달이면 원인 설명 — 법규 한도까지 모두 올렸을 때의 최대치와 걸리는 기준
     let why = "";
     if (!res.meets) {
-      const bound = tentMetrics(project, new Map([...legalMap].map(([id, f]) => [id, Math.min(f, o.maxFloors)])), o);
-      const cnt = new Map<string, number>();
-      for (const r of legal) {
-        const k = r.limit === "한도" ? `최고층 한도(${o.maxFloors}층)` : r.limit;
-        cnt.set(k, (cnt.get(k) ?? 0) + 1);
-      }
-      const free = planTent(project, new Map(plans.map((b) => [b.id, o.maxFloors])), o);
       const unit = kind === "far" ? "%" : "세대";
-      const bv = kind === "far" ? (bound.farPct ?? 0).toFixed(1) : bound.units.toLocaleString();
+      const bv = kind === "far" ? (res.farPct ?? 0).toFixed(1) : res.units.toLocaleString();
       why =
-        `<div class="tp-why"><b>왜 못 채우나요?</b> 이 배치(동 위치·바닥면적)로는 모든 동을 법규 최대 층수까지 올려도 ` +
+        `<div class="tp-why"><b>왜 못 채우나요?</b> 이 배치(동 위치·바닥면적)로는 우선순위대로 법규 한도까지 올려도 ` +
         `<b>${kind === "far" ? "용적률" : "세대수"} ${bv}${unit}</b>가 한계입니다 (목표 ${o.target.value.toLocaleString()}${unit}). ` +
-        `동마다 막는 기준: ${[...cnt].map(([k, v]) => `${k} ${v}동`).join(" · ")}.<br>` +
-        (free.meets
-          ? `법규를 빼고 텐트형만 적용하면 최고 ${free.peak}층으로 목표를 채울 수 있습니다(참고). `
-          : `법규를 빼도 최고 ${o.maxFloors}층 한도로는 부족합니다 — 최고층 한도를 올리거나 동을 추가·확대해야 합니다. `) +
-        `→ 인동거리가 막으면 동 간격을, 정북사선이 막으면 북측 이격을 넓히거나 동 바닥면적(층당 세대)을 키워야 합니다.</div>`;
+        (reasons.size ? `법규로 낮아진 동: ${[...reasons].map(([k, v]) => `${k} ${v}동`).join(" · ")}.<br>` : "<br>") +
+        `→ 인동거리가 막으면 동 간격을, 정북사선이 막으면 북측 이격을 넓히거나, 탑상형 바닥면적을 키우거나 최고층 한도를 올려 보세요.` +
+        (o.allowRelax ? "" : ` 스카이라인 규칙을 깨더라도 목표를 우선하려면 "낮은 동을 끌어올려 목표 우선"을 켜세요.`) +
+        `</div>`;
     }
-    const rows = [...res.rows].sort((a, b) => b.depth - a.depth);
+    const rows = [...res.rows].sort((a, b) => b.floors - a.floors || b.score - a.score);
     const targetText = kind === "far" ? `용적률 ${o.target.value}%` : `${o.target.value.toLocaleString()}세대`;
     out.innerHTML =
       (res.relaxedLift !== null
@@ -1200,16 +1172,16 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
       `세대 ${res.units.toLocaleString()} · 용적률 ${res.farPct === null ? "—" : res.farPct.toFixed(1) + "%"} ` +
       `(주거 ${Math.round(res.residentialM2).toLocaleString()} + 근생 ${o.retailM2.toLocaleString()} + 부대 ${Math.round(res.amenityM2).toLocaleString()}㎡)` +
       (res.meets ? "" : ` — 최고층 ${o.maxFloors}층과 법규 한도 안에서는 ${kind === "far" ? `${Math.abs(res.gap).toFixed(1)}%p` : `${Math.abs(Math.round(res.gap))}세대`} 부족합니다`) +
-      `</p><table class="ft-table"><tr><th>동</th><th>깊이</th><th>가장자리</th><th>텐트형</th><th>법규 최대</th><th>배분</th><th></th></tr>` +
+      `</p><table class="ft-table"><tr><th>동</th><th>형태</th><th>높이 점수</th><th>가장자리</th><th>규칙 층수</th><th>배분 (법규 반영)</th><th></th></tr>` +
       rows
         .map(
           (r) =>
-            `<tr><td>${r.name}</td><td>${(r.depth * 100).toFixed(0)}%</td><td>${r.edgeFloors}층</td><td>${r.ideal}층</td><td>${r.legalMax}층</td>` +
+            `<tr><td>${r.name}</td><td>${r.role}</td><td>${(r.score * 100).toFixed(0)}</td><td>${r.edgeFloors}층</td><td>${r.ideal}층</td>` +
             `<td class="${r.capped ? "down" : ""}">${r.floors}층${r.capped ? " (법규)" : ""}</td>` +
             `<td><span class="tent-bar${r.capped ? " cap" : ""}" style="width:${Math.round((r.floors / Math.max(1, res.peak)) * 80)}px"></span></td></tr>`,
         )
         .join("") +
-      `</table><p class="hint">깊이 = 대지 경계에서 얼마나 안쪽인가(100% = 가장 가운데). 빨간 막대는 법규 최대 층수로 잘린 동입니다. 연면적은 개략(바닥면적 × 주거층수)입니다.</p>`;
+      `</table><p class="hint">높이 점수 = 가운데일수록·북쪽일수록 높음(100이 가장 높은 자리). 형태: 탑상형은 점수대로 높게, 탑에 붙은 날개·떨어진 판상형은 그 비율만큼 낮게. 빨간 막대는 법규 최대 층수로 잘린 동입니다. 연면적은 개략(바닥면적 × 주거층수)입니다.</p>`;
     out.insertAdjacentHTML("afterbegin", why);
     (document.getElementById("tp-apply") as HTMLElement).hidden = false;
   } finally {
@@ -1629,6 +1601,9 @@ function syncSetbackRules(): void {
   r.spacingRatioWindow = Math.max(0.1, parseFloat(spacingWindowInput.value) || 0.5);
   r.spacingNoWindowM = Math.max(0, parseFloat(spacingNoWindowMInput.value) || 8);
   r.spacingSideM = Math.max(0, parseFloat(spacingSideMInput.value) || 4);
+  r.spacingNaEnabled = spacingNaInput.checked;
+  r.spacingNaHigh = Math.max(0.1, parseFloat(spacingNaHighInput.value) || 0.4);
+  r.spacingNaLow = Math.max(0.1, parseFloat(spacingNaLowInput.value) || 0.5);
 }
 
 /** SetbackRules 값을 입력창에 반영 (프리셋 적용 시) */
@@ -1640,6 +1615,18 @@ function fillSetbackInputs(r: SetbackRules): void {
   spacingWindowInput.value = String(r.spacingRatioWindow);
   spacingNoWindowMInput.value = String(r.spacingNoWindowM);
   spacingSideMInput.value = String(r.spacingSideM);
+  spacingNaInput.checked = r.spacingNaEnabled ?? true;
+  spacingNaHighInput.value = String(r.spacingNaHigh ?? 0.4);
+  spacingNaLowInput.value = String(r.spacingNaLow ?? 0.5);
+}
+const spacingNaInput = document.getElementById("spacing-na") as HTMLInputElement;
+const spacingNaHighInput = document.getElementById("spacing-na-high") as HTMLInputElement;
+const spacingNaLowInput = document.getElementById("spacing-na-low") as HTMLInputElement;
+for (const el of [spacingNaInput, spacingNaHighInput, spacingNaLowInput]) {
+  el.addEventListener("change", () => {
+    syncSetbackRules();
+    updateSetbackChecks();
+  });
 }
 
 // 서울시 조례 ⇄ 시행령 기본값 프리셋 토글 — 값은 types.ts의 프리셋 함수가 단일 출처

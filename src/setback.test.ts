@@ -322,7 +322,9 @@ describe("인동거리 — 마주보는 벽면 판정 (직각방향 겹침)", ()
   it("높이가 다르면 높은 동 기준 — 30m/60m 남북 → 기준 30m(0.5×60)", () => {
     const a = mkBuilding("계획주동", rect(0, 0, 20, 10), 10, 3); // 30m
     const b = mkBuilding("계획주동", rect(0, 39, 20, 49), 20, 3); // 60m, 이격 29m
-    const r = runSpacingCheck(mkProject([a, b]));
+    const p = mkProject([a, b]);
+    p.analysis.setbackRules.spacingNaEnabled = false; // 가목 확인 (나목은 아래 별도 테스트)
+    const r = runSpacingCheck(p);
     expect(r.checks[0].height).toBeCloseTo(60);
     expect(r.checks[0].required).toBeCloseTo(30);
     expect(r.checks[0].distance).toBeCloseTo(29);
@@ -541,5 +543,34 @@ describe("인동거리 — 측벽 판별(방향 기준)", () => {
     const r = runSpacingCheck(mkProject([a, b]));
     expect(r.checks[0].rule).toBe("측벽");
     expect(r.checks[0].required).toBeCloseTo(4);
+  });
+});
+
+describe("인동거리 나목 (남저북고)", async () => {
+  const { runSpacingCheck } = await import("./spacing");
+  const { mkBuilding, mkProject, rect } = await import("./testutil");
+  // 남측 동 y 0~10 (창 북향 아님 — 남측 벽에 창), 북측 동 y 36~46 (남측 벽에 창) → 26m 마주봄
+  const mk = (southFloors: number, northFloors: number) => {
+    const south = mkBuilding("S", "계획주동", rect(0, 0, 40, 10), southFloors, { windowSegments: [[{ x: 5, y: 0 }, { x: 35, y: 0 }]] });
+    const north = mkBuilding("N", "계획주동", rect(0, 36, 40, 46), northFloors, { windowSegments: [[{ x: 5, y: 36 }, { x: 35, y: 36 }]] });
+    return mkProject([south, north]);
+  };
+  it("남쪽 동이 낮으면 나목 — max(0.4×높은 동, 0.5×낮은 동)", () => {
+    const r = runSpacingCheck(mk(5, 20)); // 높이 15m / 60m
+    const c = r.checks[0];
+    expect(c.rule).toBe("채광(나목)");
+    expect(c.required).toBeCloseTo(24, 6);
+    expect(c.pass).toBe(true); // 26m ≥ 24m (가목이면 30m 필요 → 위반)
+  });
+  it("남쪽 동이 더 높으면 가목 (0.5×높은 동)", () => {
+    const c = runSpacingCheck(mk(20, 5)).checks[0];
+    expect(c.rule).toBe("채광");
+    expect(c.required).toBeCloseTo(30, 6);
+    expect(c.pass).toBe(false);
+  });
+  it("나목 끄면 가목", () => {
+    const p = mk(5, 20);
+    p.analysis.setbackRules.spacingNaEnabled = false;
+    expect(runSpacingCheck(p).checks[0].rule).toBe("채광");
   });
 });

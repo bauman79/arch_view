@@ -2108,6 +2108,14 @@
                   <input type="number" id="spacing-window" value="0.5" step="0.05" min="0.1" max="2" />
                 </div>
                 <div class="row">
+                  <label title="남쪽 동이 낮고 주된 개구부가 남향(두 동 축이 남동~남서)인 경우 — 시행령 제86조 제3항 제2호 나목"><input type="checkbox" id="spacing-na" checked /> 나목(남저북고) 적용</label>
+                </div>
+                <div class="row">
+                  <label for="spacing-na-high">나목 높은 동 ×H · 낮은 동 ×H</label>
+                  <span><input type="number" id="spacing-na-high" value="0.4" step="0.05" min="0.1" max="2" style="width:60px" />
+                  <input type="number" id="spacing-na-low" value="0.5" step="0.05" min="0.1" max="2" style="width:60px" /></span>
+                </div>
+                <div class="row">
                   <label for="spacing-nowindow-m">창없는 벽↔측벽(m)</label>
                   <input type="number" id="spacing-nowindow-m" value="8" step="0.5" min="0" max="30" />
                 </div>
@@ -2448,6 +2456,14 @@
           <label>최고·최저 층</label><span><input type="number" id="tp-max" value="35" min="1" max="99" style="width:60px" /> ~ <input type="number" id="tp-min" value="7" min="1" max="99" style="width:60px" /></span>
           <label>주변 건물 층수 가정</label><span>최소 <input type="number" id="tp-assume" value="10" min="0" max="60" step="1" style="width:60px" />층 <span class="hint">인접건물이 없거나 더 낮으면 이 층수로 봄</span></span>
           <label>가장자리 = 주변 층수 ×</label><span><input type="number" id="tp-edge" value="1" min="0.5" max="5" step="0.1" style="width:60px" /> (반경 <input type="number" id="tp-radius" value="100" min="20" max="500" step="10" style="width:60px" />m)</span>
+          <label>높이 배치</label><span><select id="tp-north">
+            <option value="0">가운데 높게 (텐트)</option>
+            <option value="0.5" selected>가운데 + 북쪽 높게 (남저북고)</option>
+            <option value="1">북쪽 높게 (남저북고)</option></select></span>
+          <label>탑상형 판정</label><span>바닥 <input type="number" id="tp-tarea" value="400" min="0" step="50" style="width:70px" />㎡ 이상 · 가로세로비 <input type="number" id="tp-tasp" value="1.4" min="1" max="5" step="0.1" style="width:55px" /> 이하</span>
+          <label>판상·날개 층수</label><span>탑상형의 <input type="number" id="tp-slab" value="60" min="20" max="100" step="5" style="width:60px" />% <span class="hint">탑에 붙은 작은 동 = 날개</span></span>
+          <label>높이 단계</label><span><select id="tp-tier"><option value="0">없음 (층마다)</option><option value="3">3층 단위</option><option value="5" selected>5층 단위</option></select></span>
+          <label>목표 미달 시</label><span><label><input type="checkbox" id="tp-relax" /> 낮은 동을 끌어올려 목표 우선 (스카이라인 규칙 완화)</label></span>
           <label>텐트 곡률</label><span><select id="tp-shape"><option value="0.6">완만(넓게 높음)</option><option value="1" selected>보통</option><option value="1.6">뾰족(가운데만)</option></select></span>
           <label>세대당 바닥면적(㎡)</label><span><input type="number" id="tp-apu" value="110" min="30" max="300" step="5" style="width:70px" /> <span class="hint">평형 구성이 없는 동만</span></span>
         </div>

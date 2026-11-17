@@ -31,7 +31,7 @@ import { edgeHasWindow } from "./windows";
  * 드래그·회전 중 매 프레임 호출 가능.
  */
 
-export type SpacingRule = "채광" | "창없음" | "측벽";
+export type SpacingRule = "채광" | "채광(나목)" | "창없음" | "측벽";
 
 /** 마주보는 구간으로 인정할 최소 겹침 길이 (m) — 모서리만 살짝 걸치는 경우는 마주봄이 아니다 */
 const MIN_OVERLAP = 1.0;
@@ -408,6 +408,14 @@ function facingCandidates(plans: PlanEntry[], index: EdgeIndex): Map<number, [nu
 }
 
 /** 벽면 쌍의 적용 기준과 요구 이격거리 */
+export interface NaRule {
+  enabled: boolean;
+  high: number;
+  low: number;
+  /** 진남 방향 (도면 좌표 단위벡터) */
+  south: Point2;
+}
+
 function ruleFor(
   src: PlanEntry,
   i: number,
@@ -416,10 +424,24 @@ function ruleFor(
   ratioWindow: number,
   noWindowM: number,
   sideM: number,
+  na?: NaRule,
 ): { rule: SpacingRule; required: number } {
   const winSrc = src.edgeWin[i];
   const winTgt = tgt.edgeWin[j];
   const height = Math.max(src.height, tgt.height);
+  // 나목: 남쪽 동이 낮고, 북쪽 동의 마주보는 벽이 남향(±45° — 두 동 축이 남동~남서) 채광창 벽면
+  if (na?.enabled && (winSrc || winTgt)) {
+    const cos45 = Math.SQRT1_2;
+    const nS = src.normals[i], nT = tgt.normals[j];
+    const srcFacesSouth = nS.x * na.south.x + nS.y * na.south.y >= cos45;
+    const tgtFacesSouth = nT.x * na.south.x + nT.y * na.south.y >= cos45;
+    const north = srcFacesSouth ? src : tgtFacesSouth ? tgt : null; // 남향 벽을 가진 쪽 = 북쪽 동
+    const northWin = north === src ? winSrc : north === tgt ? winTgt : false;
+    const south = north === src ? tgt : src;
+    if (north && northWin && south.height < north.height) {
+      return { rule: "채광(나목)", required: Math.max(north.height * na.high, south.height * na.low) };
+    }
+  }
   // 가목: 어느 한쪽이 채광창 있는 벽면(측벽 제외)이면 0.5H — 측벽에서는 비율 거리를 보지 않는다
   if (winSrc || winTgt) return { rule: "채광", required: height * ratioWindow };
   // 마목: 측벽 ↔ 측벽 4m
@@ -435,6 +457,14 @@ export function runSpacingCheck(project: Project): SpacingResult {
     spacingNoWindowM: noWindowM,
     spacingSideM: sideM,
   } = project.analysis.setbackRules;
+  const sr = project.analysis.setbackRules;
+  const th = (project.site.northAngle * Math.PI) / 180;
+  const na: NaRule = {
+    enabled: sr.spacingNaEnabled ?? true,
+    high: sr.spacingNaHigh ?? 0.4,
+    low: sr.spacingNaLow ?? 0.5,
+    south: { x: Math.sin(th), y: -Math.cos(th) }, // 진북 (−sinθ, cosθ)의 반대
+  };
 
   const plans = project.buildings
     .filter((b) => b.type === "계획주동")
@@ -494,6 +524,7 @@ export function runSpacingCheck(project: Project): SpacingResult {
               ratioWindow,
               noWindowM,
               sideM,
+              na,
             );
             const check: SpacingCheck = {
               aId: A.id,

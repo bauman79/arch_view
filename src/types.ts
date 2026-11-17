@@ -140,6 +140,14 @@ export interface SetbackRules {
    * 이격 ≥ 이 값 × 높은 동 높이. 시행령 하한 0.5배 — 서울시 조례는 0.8배.
    */
   spacingRatioWindow: number;
+  /**
+   * 인동거리(나목): 마주보는 두 동 중 남쪽 동이 낮고 주된 개구부가 남쪽을 향하는 경우
+   * (두 동의 축이 남동~남서) — 이격 ≥ 높은 동 높이 × spacingNaHigh 이고 ≥ 낮은 동 높이 × spacingNaLow.
+   * 시행령 하한 0.4배·0.5배 (조례로 정하는 거리). 없으면(옛 .view) 0.4·0.5, 켜짐.
+   */
+  spacingNaHigh?: number;
+  spacingNaLow?: number;
+  spacingNaEnabled?: boolean;
   /** 인동거리(라목): 채광창 없는 벽면과 측벽이 마주보는 경우 최소 이격(m) — 법정 8m */
   spacingNoWindowM: number;
   /** 인동거리(마목): 측벽과 측벽이 마주보는 경우 최소 이격(m) — 법정 4m */
@@ -161,6 +169,9 @@ export function statutorySetbackRules(): SetbackRules {
     daylightRatio: 2.0,
     daylightRoadParkRatio: 2.0,
     spacingRatioWindow: 0.5,
+    spacingNaHigh: 0.4,
+    spacingNaLow: 0.5,
+    spacingNaEnabled: true,
     spacingNoWindowM: 8,
     spacingSideM: 4,
     northSetbackLowM: 1.5,
