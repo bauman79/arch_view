@@ -557,7 +557,7 @@ export function assembleLbmResult(
     steps: number;
     converged: boolean;
   },
-  seedCount = 24,
+  seedCount = 90,
 ): LbmResult {
   const n = domain.nx * domain.ny;
   const ratio = new Float32Array(n);

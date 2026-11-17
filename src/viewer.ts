@@ -282,7 +282,10 @@ export class Viewer {
    * 지금 화면을 JPG로 캡처 — 화면 크기의 최대 2배 해상도(긴 변 4096px 이하).
    * 렌더 직후 같은 작업 안에서 toBlob을 호출해 preserveDrawingBuffer 없이도 캡처된다.
    */
-  captureJpeg(quality = 0.92): Promise<Blob> {
+  captureJpeg(
+    quality = 0.92,
+    overlay?: (ctx: CanvasRenderingContext2D, w: number, h: number, scale: number) => void,
+  ): Promise<Blob> {
     const r = this.renderer;
     const prev = r.getPixelRatio();
     const w = this.container.clientWidth;
@@ -292,8 +295,15 @@ export class Viewer {
     r.setSize(w, h);
     this.controls.update();
     r.render(this.scene, this.camera);
+    // 렌더 직후(같은 작업 안) 2D 캔버스로 옮겨 범례 등을 덧그린다
+    const out = document.createElement("canvas");
+    out.width = r.domElement.width;
+    out.height = r.domElement.height;
+    const ctx = out.getContext("2d")!;
+    ctx.drawImage(r.domElement, 0, 0);
+    overlay?.(ctx, out.width, out.height, out.width / Math.max(1, w));
     const blob = new Promise<Blob>((resolve, reject) => {
-      r.domElement.toBlob(
+      out.toBlob(
         (b) => (b ? resolve(b) : reject(new Error("이미지 캡처 실패"))),
         "image/jpeg",
         quality,

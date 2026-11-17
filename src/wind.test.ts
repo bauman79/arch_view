@@ -185,3 +185,46 @@ describe("flowDirection — northAngle 보정", () => {
     expect(f30.y).toBeCloseTo(-Math.cos(Math.PI / 6), 6);
   });
 });
+
+describe("traceStreamlines — 고른 간격 유선", () => {
+  /** 원점 둘레 회전 흐름(소용돌이) — 유선이 원을 그리며 서로 겹치지 않아야 한다 */
+  function vortexField(): import("./wind").WindField {
+    const nx = 101;
+    const ny = 101;
+    const gridM = 1;
+    const u = new Float32Array(nx * ny);
+    const v = new Float32Array(nx * ny);
+    for (let iy = 0; iy < ny; iy++) {
+      for (let ix = 0; ix < nx; ix++) {
+        const x = ix - 50;
+        const y = iy - 50;
+        u[iy * nx + ix] = -y / 50;
+        v[iy * nx + ix] = x / 50;
+      }
+    }
+    return {
+      originX: -50, originY: -50, gridM, nx, ny, u, v,
+      blocked: new Uint8Array(nx * ny),
+      windSpeedMs: 1,
+      flowDir: { x: 1, y: 0 },
+      bounds: { minX: -50, minY: -50, maxX: 50, maxY: 50 },
+      shadowAreaM2: 0,
+    };
+  }
+
+  it("소용돌이 흐름에서도 서로 다른 유선은 간격의 절반 이상 떨어지고, 점마다 속도비가 있다", () => {
+    const field = vortexField();
+    const lines = traceStreamlines(field, 10); // dSep = 10m
+    expect(lines.length).toBeGreaterThan(3);
+    for (const l of lines) expect(l.ratios.length).toBe(l.points.length);
+    let minD = Infinity;
+    for (let a = 0; a < lines.length; a++) {
+      for (let b = a + 1; b < lines.length; b++) {
+        for (const p of lines[a].points) {
+          for (const q of lines[b].points) minD = Math.min(minD, Math.hypot(p.x - q.x, p.y - q.y));
+        }
+      }
+    }
+    expect(minD).toBeGreaterThan(10 * 0.5 - 1.5);
+  });
+});

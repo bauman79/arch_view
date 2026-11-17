@@ -63,6 +63,8 @@ import { formatMinutes, localDate, sunPosition } from "./sun";
 import {
   createFacilityOverlay,
   defaultFacilitySettings,
+  FACILITY_STATUS_LABEL,
+  facilityStatusColor,
   disposeFacilityOverlay,
   runFacilityCheck,
   type FacilityResult,
@@ -78,6 +80,7 @@ import {
 import {
   createSunHoursMapOverlay,
   disposeSunHoursMapOverlay,
+  HOUR_STOPS,
   runSunHoursMap,
   type SunHoursDate,
   type SunHoursMapResult,
@@ -88,6 +91,7 @@ import {
   createWindOverlay,
   disposeWindOverlay,
   traceStreamlines,
+  WIND_RATIO_STOPS,
   windDirLabel,
   type WindResult,
   type WindRoseData,
@@ -105,7 +109,13 @@ import type {
   LbmRunMessage,
   LbmStopMessage,
 } from "./lbm.worker";
-import { createLbmHeatmap, type LbmHeatmap } from "./lbmvis";
+import { createLbmHeatmap, RATIO_STOPS, type LbmHeatmap } from "./lbmvis";
+import {
+  drawLegendsOnCanvas,
+  gradientFromStops,
+  renderLegendPanel,
+  type LegendItem,
+} from "./legend";
 import { buildObstructionMeshes, disposeObstructionMeshes } from "./insolation";
 import {
   buildingHeight,
@@ -936,12 +946,14 @@ function invalidateAnalysis(): void {
     lastSunHours = null;
     clearGroup(sunHoursRoot);
     renderSunHoursSummary(null, undefined, note);
+    updateLegends();
     refreshStatusDots(computeStatusMap());
   }
   if (lastWind) {
     lastWind = null;
     clearWindOverlay();
     renderWindSummary(null, note);
+    updateLegends();
   }
   if (lastLbm || lbmWorker) {
     resetLbm(note); // 실행 중이던 워커도 종료 — 이전 배치 기준 결과라 무효
@@ -950,11 +962,13 @@ function invalidateAnalysis(): void {
     lastSunHoursMap = null;
     clearSunHoursMapOverlay();
     renderSunHoursMapSummary(null, note);
+    updateLegends();
   }
   if (lastFacility) clearFacility(note);
   // 지점 일조 측정 — 배치가 바뀌면 차폐가 달라지므로 다시 만들고 떠 있던 값은 닫는다
   disposeProbeMeshes();
   hideSunProbe();
+  updateLegends();
 }
 
 /** 교육·종교시설 창문 일조 결과 지우기 */
@@ -966,6 +980,7 @@ function clearFacility(note?: string): void {
     facilityGroup = null;
   }
   renderFacilitySummary(null, note);
+  updateLegends();
   if (had) refreshStatusDots(computeStatusMap());
 }
 
@@ -1207,6 +1222,7 @@ runSunHoursBtn.addEventListener("click", async () => {
       `격자 ${result.cells.length}셀 × ${result.samples.length}시각 · ${(ms / 1000).toFixed(1)}초${roadNote}`,
       { passRatio: result.passRatio, roadFacingOnly: result.roadFacingOnly, excluded: result.excludedBuildings },
     );
+    updateLegends();
     setStatus(
       `일조권 검토 완료 — 적합 ${passTotal} / ${result.cells.length}셀 (파랑=적합, 빨강=위반)`,
     );
@@ -1224,6 +1240,7 @@ document.getElementById("clear-sunhours")!.addEventListener("click", () => {
   lastSunHours = null;
   clearGroup(sunHoursRoot);
   renderSunHoursSummary(null);
+  updateLegends();
   refreshStatusDots(computeStatusMap());
   setStatus("일조권 검토 결과를 지웠습니다.");
 });
@@ -1274,6 +1291,7 @@ runFacilityBtn.addEventListener("click", async () => {
     viewer.scene.add(facilityGroup);
     const sec = ((performance.now() - t0) / 1000).toFixed(1);
     renderFacilitySummary(r, `기준일 ${r.date} · ${r.timeStep}분 간격 · 측정점 ${r.points.length}개 · ${sec}초`);
+    updateLegends();
     const affected = r.summaries.filter((s) => s.affected).length;
     setStatus(
       r.summaries.length === 0
@@ -1336,7 +1354,7 @@ async function loadWindRose(file: string): Promise<WindRoseData> {
 
 /** 바람길 분석용 속도장 격자 간격 (m) */
 const WIND_GRID_M = 2;
-const WIND_SEED_COUNT = 20;
+const WIND_SEED_COUNT = 90;
 
 runWindBtn.addEventListener("click", async () => {
   if (project.buildings.length === 0) {
@@ -1372,6 +1390,7 @@ runWindBtn.addEventListener("click", async () => {
       lastWind,
       `${label} EPW ${stats.hours}시간 통계 · 격자 ${WIND_GRID_M}m · 2D 포텐셜 근사(CFD 아님)`,
     );
+    updateLegends();
     setStatus(
       `바람길 분석 완료 — ${month === null ? "연간" : `${month}월`} 주풍향 ` +
         `${windDirLabel(lastWind.windDir)}(${lastWind.windDir.toFixed(0)}°) ` +
@@ -1389,6 +1408,7 @@ document.getElementById("clear-wind")!.addEventListener("click", () => {
   lastWind = null;
   clearWindOverlay();
   renderWindSummary(null);
+  updateLegends();
   setStatus("바람길 결과를 지웠습니다.");
 });
 
@@ -1416,9 +1436,11 @@ lbmDirModeSelect.addEventListener("change", () => {
 
 lbmHeatmapChk.addEventListener("change", () => {
   if (lbmHeatmap) lbmHeatmap.mesh.visible = lbmHeatmapChk.checked;
+  updateLegends();
 });
 lbmStreamChk.addEventListener("change", () => {
   if (lbmStreamGroup) lbmStreamGroup.visible = lbmStreamChk.checked;
+  updateLegends();
 });
 
 function clearLbmOverlays(): void {
@@ -1442,6 +1464,7 @@ function resetLbm(note?: string): void {
   lastLbm = null;
   clearLbmOverlays();
   renderLbmSummary(null, note);
+  updateLegends();
 }
 
 runLbmBtn.addEventListener("click", async () => {
@@ -1534,6 +1557,7 @@ runLbmBtn.addEventListener("click", async () => {
         result,
         `D2Q9 · 격자 ${gridM}m · ${dirSource === "epw" ? "EPW 주풍향" : "수동 풍향"} · 2D — CFD 상세 대체 아님`,
       );
+      updateLegends();
       const gain = ((result.maxRatio - 1) * 100).toFixed(0);
       setStatus(
         msg.converged
@@ -1609,6 +1633,7 @@ runSunMapBtn.addEventListener("click", async () => {
       result,
       `격자 2m × ${result.dates.length}일 × 17시각 · ${(ms / 1000).toFixed(1)}초`,
     );
+    updateLegends();
     setStatus(
       `일조시간 분석 완료(${date}) — ${result.cells.length}셀 · ` +
         `평균 ${result.stats.avg.toFixed(1)}h` +
@@ -1628,6 +1653,7 @@ runSunMapBtn.addEventListener("click", async () => {
 sunMapLegalCheckbox.addEventListener("change", () => {
   if (!lastSunHoursMap) return;
   showSunHoursMapOverlay();
+  updateLegends();
   setStatus(
     sunMapLegalCheckbox.checked
       ? "일조시간 법적기준 오버레이 — 파랑=연속2h 또는 총4h 충족, 빨강=미달 (참고용)"
@@ -1639,6 +1665,7 @@ document.getElementById("clear-sunhoursmap")!.addEventListener("click", () => {
   lastSunHoursMap = null;
   clearSunHoursMapOverlay();
   renderSunHoursMapSummary(null);
+  updateLegends();
   setStatus("일조시간 결과를 지웠습니다.");
 });
 
@@ -2490,6 +2517,124 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("#view-presets [d
   });
 }
 
+
+// ---------- 화면 범례(키맵) ----------
+// 분석 결과가 화면에 떠 있는 동안 색의 의미를 3D 화면 좌하단에 함께 보여준다.
+// JPG 저장 시에도 같은 범례를 이미지에 그려 넣는다.
+
+function currentLegends(): LegendItem[] {
+  const out: LegendItem[] = [];
+  if (lastSunHours) {
+    const r = lastSunHours;
+    const verdicts = r.summaries.map((s) => judgeBuilding(s, r.passRatio));
+    const pass = verdicts.filter((v) => v === "pass").length;
+    const fail = verdicts.filter((v) => v === "fail").length;
+    const rule =
+      r.rule === "continuous" ? "연속 2h(9~15시)" : r.rule === "total" ? "총 4h(8~16시)" : "연속 2h 또는 총 4h";
+    out.push({
+      kind: "swatches",
+      title: `일조권 — ${rule}`,
+      items: [
+        { color: "#4c8bf5", label: "기준 충족" },
+        { color: "#e5484d", label: "기준 미달" },
+      ],
+      note: `인접 건물 ${pass + fail}동 중 적합 ${pass} · 미달 ${fail}`,
+    });
+  }
+  if (lastFacility) {
+    const counts = new Map<string, number>();
+    for (const pt of lastFacility.points) counts.set(pt.status, (counts.get(pt.status) ?? 0) + 1);
+    const order = ["ok", "project", "worse", "existing"] as const;
+    out.push({
+      kind: "swatches",
+      title: "유치원·학교·교회 창문 일조",
+      items: order.map((k) => ({
+        color: facilityStatusColor(k),
+        label: `${FACILITY_STATUS_LABEL[k]} ${counts.get(k) ?? 0}`,
+      })),
+      note: `측정점 ${lastFacility.points.length}개 · 사업 전후 비교`,
+    });
+  }
+  if (lastSunHoursMap && sunHoursMapGroup) {
+    const m = lastSunHoursMap;
+    if (sunMapLegalCheckbox.checked) {
+      out.push({
+        kind: "swatches",
+        title: "일조시간 지도 — 법적 기준",
+        items: [
+          { color: "#4c8bf5", label: "연속 2h 또는 총 4h 충족" },
+          { color: "#e5484d", label: "미달" },
+        ],
+        note: `기준일 ${m.legalDate}`,
+      });
+    } else {
+      out.push({
+        kind: "gradient",
+        title: `일조시간 지도 (${m.date})`,
+        stops: gradientFromStops(HOUR_STOPS, 8),
+        ticks: [0, 2, 4, 6, 8].map((h) => ({ at: h / 8, label: h === 8 ? "8h+" : `${h}h` })),
+        note:
+          `평균 ${m.stats.avg.toFixed(1)}h` +
+          (m.groundAvg !== null ? ` · 지면 평균 ${m.groundAvg.toFixed(1)}h` : ""),
+      });
+    }
+  }
+  const windTicks = [
+    { at: 0, label: "정체" },
+    { at: 0.25, label: "0.5" },
+    { at: 0.5, label: "1.0(주풍)" },
+    { at: 0.75, label: "1.5" },
+    { at: 1, label: "2.0+" },
+  ];
+  if (lastWind && windGroup) {
+    out.push({
+      kind: "gradient",
+      title: "바람길 — 풍속비 (국지 풍속 / 주풍속)",
+      stops: gradientFromStops(WIND_RATIO_STOPS, 2),
+      ticks: windTicks,
+      note:
+        `${lastWind.month === null ? "연간" : `${lastWind.month}월`} 주풍향 ${windDirLabel(lastWind.windDir)} ` +
+        `${lastWind.windSpeedMs.toFixed(1)}m/s · 화살표 = 흐름 방향`,
+    });
+  }
+  if (lastLbm) {
+    if (lbmStreamGroup?.visible) {
+      out.push({
+        kind: "gradient",
+        title: "바람길 LBM — 유선 풍속비",
+        stops: gradientFromStops(WIND_RATIO_STOPS, 2),
+        ticks: windTicks,
+        note:
+          `풍향 ${windDirLabel(lastLbm.windDirDeg)}(${lastLbm.windDirDeg.toFixed(0)}°) ` +
+          `${lastLbm.windSpeedMs.toFixed(1)}m/s · 화살표 = 흐름 방향`,
+      });
+    }
+    if (lbmHeatmap?.mesh.visible) {
+      out.push({
+        kind: "gradient",
+        title: "바람길 LBM — 바닥 풍속비",
+        stops: RATIO_STOPS.map(([v, [r, g, b]]) => ({
+          at: v / 2,
+          color: `rgb(${r},${g},${b})`,
+        })),
+        ticks: windTicks,
+      });
+    }
+  }
+  return out;
+}
+
+function updateLegends(): void {
+  // 초기화 도중(아래쪽 변수 선언 전)에 불려도 안전하도록 매번 찾고 예외는 무시
+  const el = document.getElementById("view-legend");
+  if (!el) return;
+  try {
+    renderLegendPanel(el, currentLegends());
+  } catch {
+    /* 초기화 전 — 다음 갱신 때 그린다 */
+  }
+}
+
 // ---------- 시점 저장 · JPG 내보내기 ----------
 
 const savedViewsEl = document.getElementById("saved-views") as HTMLElement;
@@ -2547,7 +2692,10 @@ document.getElementById("export-jpg")!.addEventListener("click", async () => {
     `arch_view_${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}_` +
     `${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}.jpg`;
   try {
-    const blob = await viewer.captureJpeg();
+    const legends = currentLegends();
+    const blob = await viewer.captureJpeg(0.92, (ctx, _w, h, scale) =>
+      drawLegendsOnCanvas(ctx, legends, h, scale),
+    );
     const picked = await saveToDesktop(blob, filename, "JPG 이미지", {
       "image/jpeg": [".jpg", ".jpeg"],
     });

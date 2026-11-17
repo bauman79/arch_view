@@ -291,7 +291,7 @@ export async function runSunHoursMap(
 // ---------- 시각화 ----------
 
 /** 일조시간 컬러맵 구간점 (h → 색) — 0h 암청 → 8h 노랑 */
-const HOUR_STOPS: [number, number][] = [
+export const HOUR_STOPS: [number, number][] = [
   [0, 0x0d1525],
   [1, 0x4f46e5],
   [2, 0x3b82f6],

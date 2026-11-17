@@ -1150,6 +1150,83 @@
         color: #f0b45a;
       }
 
+      /* 좌하단 분석 범례(키맵) */
+      #view-legend {
+        position: absolute;
+        left: 10px;
+        bottom: 28px;
+        z-index: 6;
+        width: 236px;
+        max-height: calc(100% - 120px);
+        overflow-y: auto;
+        background: rgba(13, 21, 37, 0.86);
+        border: 1px solid #1e2d4a;
+        border-radius: 6px;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        backdrop-filter: blur(4px);
+        pointer-events: none;
+      }
+      #view-legend[hidden] {
+        display: none;
+      }
+      #view-legend .lg-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: #e2e8f0;
+        margin-bottom: 5px;
+      }
+      #view-legend .lg-sw {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 3px 8px;
+        font-size: 11px;
+        color: #cbd5e1;
+      }
+      #view-legend .lg-sw i {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        margin-right: 4px;
+        vertical-align: -1px;
+      }
+      #view-legend .lg-bar {
+        height: 9px;
+        border-radius: 2px;
+      }
+      #view-legend .lg-ticks {
+        position: relative;
+        height: 14px;
+        font-size: 10px;
+        color: #94a3b8;
+        margin-top: 2px;
+      }
+      #view-legend .lg-ticks span {
+        position: absolute;
+        transform: translateX(-50%);
+        white-space: nowrap;
+      }
+      #view-legend .lg-ticks span:first-child {
+        transform: none;
+      }
+      #view-legend .lg-ticks span:last-child {
+        transform: translateX(-100%);
+      }
+      #view-legend .lg-note {
+        font-size: 10px;
+        color: #94a3b8;
+        margin-top: 3px;
+      }
+      @media (max-width: 700px) {
+        #view-legend {
+          width: 190px;
+          padding: 8px;
+        }
+      }
+
       /* 좌하단 좌표 표시 */
       #cursor-coords {
         position: absolute;
@@ -2077,7 +2154,7 @@
                   </select>
                 </div>
                 <div class="row">
-                  <label><input type="checkbox" id="lbm-heatmap" checked /> 히트맵</label>
+                  <label><input type="checkbox" id="lbm-heatmap" /> 히트맵</label>
                   <label><input type="checkbox" id="lbm-streamlines" checked /> 유선</label>
                 </div>
                 <div class="row">
@@ -2143,6 +2220,7 @@
             <input type="range" id="time-slider" min="480" max="960" step="10" value="750" />
             <span id="sun-label"></span>
           </div>
+          <div id="view-legend" hidden></div>
           <div id="cursor-coords"></div>
           <div id="compass">
             <svg viewBox="0 0 36 36" width="36" height="36" aria-hidden="true">

@@ -13,7 +13,7 @@ const LBM_HEATMAP_Y = 0.2;
 const LBM_HEATMAP_OPACITY = 0.78;
 
 /** 색 구간점 — U/U₀ 비율 0~2 정규화: 저속 파랑 → 청록 → 노랑 → 초고속 빨강 */
-const RATIO_STOPS: [number, [number, number, number]][] = [
+export const RATIO_STOPS: [number, [number, number, number]][] = [
   [0.0, [0x1e, 0x3a, 0x8a]], // 짙은 파랑 (정체)
   [0.5, [0x06, 0xb6, 0xd4]], // 청록 (감속)
   [1.2, [0xea, 0xb3, 0x08]], // 노랑 (주풍속 부근~가속)

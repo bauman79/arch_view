@@ -386,46 +386,124 @@ function isBlockedAt(field: WindField, x: number, y: number): boolean {
 // ---------- 스트림라인 추적 ----------
 
 export interface Streamline {
+  /** 바람이 흘러가는 순서(상류 → 하류) */
   points: Point2[];
+  /** 점마다 국지 속도 / 주풍속 — 유선 색을 구간별로 칠하는 데 쓴다 */
+  ratios: number[];
   /** 경로 평균 속도 / 주풍속 (배율) */
   speedRatio: number;
 }
 
-const STREAM_STEP_M = 0.5;
-const STREAM_MAX_STEPS = 300;
 /** 이 비율 미만으로 느려지면 정체로 보고 중단 */
 const STREAM_STALL_RATIO = 0.02;
 
 /**
- * 대지 업풍(바람 불어오는 쪽) 경계에서 seedCount개 시드 → Euler 적분
- * (0.5m 스텝, 최대 300스텝). 건물 내부 진입·도메인 이탈·정체 시 중단.
+ * 고른 간격 유선(evenly-spaced streamlines, Jobard–Lefer 방식 단순화).
+ *
+ * - 유선 간격 dSep = 흐름 직각 폭 / lineCount (격자 1.5배 이상)
+ * - 시드: 상류 경계를 따라 먼저, 이어서 도메인 전체 격자 — 건물 뒤 소용돌이·정체
+ *   영역에도 선이 들어가 첨부 사례처럼 회전 흐름이 보인다
+ * - 각 시드에서 앞·뒤 양방향으로 RK2 적분, 다른 유선(또는 한 바퀴 돈 자기 자신)과
+ *   dSep/2보다 가까워지면 멈춘다 → 선이 겹치지 않고 소용돌이는 고리로 닫힌다
  */
-export function traceStreamlines(field: WindField, seedCount: number): Streamline[] {
+export function traceStreamlines(field: WindField, lineCount: number): Streamline[] {
   const { bounds, flowDir } = field;
+  const W = bounds.maxX - bounds.minX;
+  const H = bounds.maxY - bounds.minY;
+  const cross = Math.abs(W * flowDir.y) + Math.abs(H * flowDir.x);
+  const dSep = Math.max(field.gridM * 1.5, cross / Math.max(1, lineCount));
+  const dTest = dSep * 0.5;
+  const step = Math.min(field.gridM * 0.5, dSep * 0.1);
+  const maxSteps = Math.ceil(((W + H) * 2) / step);
+  const selfSkip = Math.ceil((dSep * 2.5) / step);
+  const stall = STREAM_STALL_RATIO * field.windSpeedMs;
+
+  // 점 점유 격자 — 셀 크기 dTest, 3×3 이웃만 보면 된다
+  const cs = dTest;
+  const gw = Math.ceil(W / cs) + 1;
+  const gh = Math.ceil(H / cs) + 1;
+  const grid = new Map<number, { x: number; y: number; line: number; idx: number }[]>();
+  const cellOf = (x: number, y: number) =>
+    Math.floor((y - bounds.minY) / cs) * gw + Math.floor((x - bounds.minX) / cs);
+  const tooClose = (x: number, y: number, line: number, idx: number, r: number): boolean => {
+    const cx = Math.floor((x - bounds.minX) / cs);
+    const cy = Math.floor((y - bounds.minY) / cs);
+    const r2 = r * r;
+    for (let dy = -1; dy <= 1; dy++) {
+      const yy = cy + dy;
+      if (yy < 0 || yy >= gh) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        const xx = cx + dx;
+        if (xx < 0 || xx >= gw) continue;
+        const list = grid.get(yy * gw + xx);
+        if (!list) continue;
+        for (const q of list) {
+          if (q.line === line && Math.abs(q.idx - idx) <= selfSkip) continue;
+          if ((q.x - x) ** 2 + (q.y - y) ** 2 < r2) return true;
+        }
+      }
+    }
+    return false;
+  };
+  const occupy = (x: number, y: number, line: number, idx: number) => {
+    const k = cellOf(x, y);
+    const list = grid.get(k);
+    const e = { x, y, line, idx };
+    if (list) list.push(e);
+    else grid.set(k, [e]);
+  };
+  const inDomain = (x: number, y: number) =>
+    x >= bounds.minX && x <= bounds.maxX && y >= bounds.minY && y <= bounds.maxY;
+  const dirAt = (x: number, y: number): { dx: number; dy: number; sp: number } | null => {
+    if (isBlockedAt(field, x, y)) return null;
+    const v = sampleWind(field, x, y);
+    if (!v) return null;
+    const sp = Math.hypot(v.x, v.y);
+    if (sp < stall) return null;
+    return { dx: v.x / sp, dy: v.y / sp, sp };
+  };
+
+  /** 한 방향 적분 — sign=+1 순방향, -1 역방향 */
+  const integrate = (
+    x0: number,
+    y0: number,
+    sign: 1 | -1,
+    line: number,
+  ): { pts: Point2[]; rs: number[] } => {
+    const pts: Point2[] = [];
+    const rs: number[] = [];
+    let x = x0;
+    let y = y0;
+    for (let k = 1; k <= maxSteps; k++) {
+      const d1 = dirAt(x, y);
+      if (!d1) break;
+      const mx = x + sign * d1.dx * step * 0.5;
+      const my = y + sign * d1.dy * step * 0.5;
+      const d2 = dirAt(mx, my);
+      if (!d2) break;
+      const nx = x + sign * d2.dx * step;
+      const ny = y + sign * d2.dy * step;
+      if (!inDomain(nx, ny)) break;
+      const idx = sign * k;
+      if (tooClose(nx, ny, line, idx, dTest)) break;
+      x = nx;
+      y = ny;
+      pts.push({ x, y });
+      rs.push(d2.sp / field.windSpeedMs);
+      occupy(x, y, line, idx);
+    }
+    return { pts, rs };
+  };
+
+  // 시드 후보 — 상류 경계(흐름 직각으로 dSep 간격) → 도메인 전체 격자
+  const seeds: Point2[] = [];
   const perp = { x: -flowDir.y, y: flowDir.x };
   const cx = (bounds.minX + bounds.maxX) / 2;
   const cy = (bounds.minY + bounds.maxY) / 2;
-
-  // 도메인 코너의 perp축 투영 범위 — 시드를 흐름 직각방향으로 고르게 배치
-  const corners: Point2[] = [
-    { x: bounds.minX, y: bounds.minY },
-    { x: bounds.maxX, y: bounds.minY },
-    { x: bounds.maxX, y: bounds.maxY },
-    { x: bounds.minX, y: bounds.maxY },
-  ];
-  let tMin = Infinity;
-  let tMax = -Infinity;
-  for (const c of corners) {
-    const t = (c.x - cx) * perp.x + (c.y - cy) * perp.y;
-    tMin = Math.min(tMin, t);
-    tMax = Math.max(tMax, t);
-  }
-  const far = Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
-
-  const lines: Streamline[] = [];
-  for (let i = 0; i < seedCount; i++) {
-    const t = tMin + ((i + 0.5) / seedCount) * (tMax - tMin);
-    // 업풍 먼 곳에서 흐름 방향으로 쏜 반직선의 도메인 진입점 (slab 교차)
+  const half = cross / 2;
+  const far = Math.hypot(W, H);
+  for (let t = -half + dSep / 2; t < half; t += dSep) {
+    // 상류 먼 곳에서 흐름 방향으로 쏜 반직선의 도메인 진입점 (slab 교차)
     const sx = cx + perp.x * t - flowDir.x * far;
     const sy = cy + perp.y * t - flowDir.y * far;
     let enter = 0;
@@ -447,25 +525,31 @@ export function traceStreamlines(field: WindField, seedCount: number): Streamlin
       exit = Math.min(exit, Math.max(t1, t2));
     }
     if (enter >= exit || !isFinite(enter)) continue;
+    seeds.push({ x: sx + flowDir.x * (enter + 0.01), y: sy + flowDir.y * (enter + 0.01) });
+  }
+  const upstreamSeeds = seeds.length;
+  for (let y = bounds.minY + dSep / 2; y < bounds.maxY; y += dSep) {
+    for (let x = bounds.minX + dSep / 2; x < bounds.maxX; x += dSep) seeds.push({ x, y });
+  }
 
-    let x = sx + flowDir.x * (enter + 0.01);
-    let y = sy + flowDir.y * (enter + 0.01);
-    const points: Point2[] = [];
-    let ratioSum = 0;
-    for (let step = 0; step < STREAM_MAX_STEPS; step++) {
-      if (isBlockedAt(field, x, y)) break;
-      const vel = sampleWind(field, x, y);
-      if (!vel) break;
-      const speed = Math.hypot(vel.x, vel.y);
-      if (speed < STREAM_STALL_RATIO * field.windSpeedMs) break;
-      points.push({ x, y });
-      ratioSum += speed / field.windSpeedMs;
-      x += (vel.x / speed) * STREAM_STEP_M;
-      y += (vel.y / speed) * STREAM_STEP_M;
-    }
-    if (points.length >= 2) {
-      lines.push({ points, speedRatio: ratioSum / points.length });
-    }
+  const minLen = Math.ceil((dSep * 2) / step);
+  const lines: Streamline[] = [];
+  let lineId = 0;
+  for (let si = 0; si < seeds.length; si++) {
+    const s0 = seeds[si];
+    const d0 = dirAt(s0.x, s0.y);
+    if (!d0) continue;
+    if (tooClose(s0.x, s0.y, -1, 0, dSep * 0.9)) continue;
+    const id = lineId++;
+    occupy(s0.x, s0.y, id, 0);
+    const back = integrate(s0.x, s0.y, -1, id);
+    const fwd = integrate(s0.x, s0.y, 1, id);
+    const points = [...back.pts.reverse(), { x: s0.x, y: s0.y }, ...fwd.pts];
+    const ratios = [...back.rs.reverse(), d0.sp / field.windSpeedMs, ...fwd.rs];
+    // 내부 시드의 짧은 조각은 버린다(자국만 남김 — 점유는 유지해 주변이 너무 빽빽해지지 않게)
+    if (points.length < 2 || (si >= upstreamSeeds && points.length < minLen)) continue;
+    const avg = ratios.reduce((a, r) => a + r, 0) / ratios.length;
+    lines.push({ points, ratios, speedRatio: avg });
   }
   return lines;
 }
@@ -486,21 +570,44 @@ export interface WindResult {
 
 // ---------- Three.js 오버레이 ----------
 
-/** 속도비 → 색 (파랑=정체 → 초록=주풍속 → 빨강=가속) */
-export function windColorHex(speedRatio: number): number {
-  if (speedRatio < 0.3) return 0x3b82f6;
-  if (speedRatio < 0.7) return 0x06b6d4;
-  if (speedRatio <= 1.3) return 0x22c55e;
-  if (speedRatio <= 2.0) return 0xf59e0b;
-  return 0xef4444;
+/**
+ * 풍속비 컬러맵 — 파랑(정체) → 청록 → 초록(주풍속) → 노랑 → 주황 → 빨강(2배 이상 가속).
+ * 유선 색과 화면 범례가 같은 값을 쓴다.
+ */
+export const WIND_RATIO_STOPS: [number, number][] = [
+  [0.0, 0x1d4ed8],
+  [0.5, 0x06b6d4],
+  [1.0, 0x22c55e],
+  [1.3, 0xeab308],
+  [1.6, 0xf97316],
+  [2.0, 0xef4444],
+];
+const windStopColors = WIND_RATIO_STOPS.map(([, h]) => new THREE.Color(h));
+
+export function windRatioColor(ratio: number, out = new THREE.Color()): THREE.Color {
+  const st = WIND_RATIO_STOPS;
+  if (ratio <= st[0][0]) return out.copy(windStopColors[0]);
+  for (let i = 1; i < st.length; i++) {
+    if (ratio <= st[i][0]) {
+      const t = (ratio - st[i - 1][0]) / (st[i][0] - st[i - 1][0]);
+      return out.lerpColors(windStopColors[i - 1], windStopColors[i], t);
+    }
+  }
+  return out.copy(windStopColors[windStopColors.length - 1]);
 }
 
-const WIND_OVERLAY_Y = 0.5;
-/** 유선 튜브 반지름 (m) — GL 라인은 굵기 지정이 안 먹혀 튜브 메시로 그린다 */
-const WIND_TUBE_RADIUS = 0.35;
+/** 속도비 → 대표색 (평균 속도 표시용) */
+export function windColorHex(speedRatio: number): number {
+  return windRatioColor(speedRatio).getHex();
+}
+
+/** 유선 높이 — 보행자 높이 부근, 지면 히트맵(0.2m)보다 위 */
+const WIND_OVERLAY_Y = 1.2;
+const ARROW_EVERY = 3.5; // 유선 간격의 몇 배마다 화살표
 
 /**
- * 스트림라인을 지면 위 튜브 묶음으로 표시 — scene에 추가하고 그룹을 반환.
+ * 스트림라인을 풍속비 그라데이션 튜브 + 진행 방향 화살표로 표시.
+ * 튜브는 한 지오메트리로 합쳐 그린다(유선 수백 개도 draw call 1회).
  * @param elevate (x,y DXF)→지형 고도(m). 주면 유선을 지형 표면을 따라 드레이프한다
  *   (표시 전용 — 속도장 계산은 지형과 무관한 2D).
  */
@@ -511,29 +618,104 @@ export function createWindOverlay(
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = "wind-overlay";
-  for (const line of result.streamlines) {
-    if (line.points.length < 2) continue;
+  const lines = result.streamlines.filter((l) => l.points.length >= 2);
+
+  // 유선 간격 추정 — 튜브 굵기·화살표 크기 기준 (이웃 유선 시작점 간 평균 거리는 불안정해 길이로 대신)
+  let totalLen = 0;
+  for (const l of lines) {
+    for (let i = 1; i < l.points.length; i++) {
+      totalLen += Math.hypot(l.points[i].x - l.points[i - 1].x, l.points[i].y - l.points[i - 1].y);
+    }
+  }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const l of lines) for (const p of l.points) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const area = lines.length ? Math.max(1, (maxX - minX) * (maxY - minY)) : 1;
+  const spacing = totalLen > 0 ? Math.min(40, Math.max(3, area / totalLen)) : 10;
+  const radius = Math.min(0.9, Math.max(0.18, spacing * 0.035));
+
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const indices: number[] = [];
+  const arrows: { pos: THREE.Vector3; dir: THREE.Vector3; color: THREE.Color }[] = [];
+  const col = new THREE.Color();
+  const RADIAL = 5;
+
+  for (const line of lines) {
+    const ratios = line.ratios ?? line.points.map(() => line.speedRatio);
     const pts = line.points.map(
-      (p) =>
-        new THREE.Vector3(
-          p.x,
-          (elevate ? elevate(p.x, p.y) : 0) + WIND_OVERLAY_Y,
-          -p.y, // DXF y+ → three -z
-        ),
+      (p) => new THREE.Vector3(p.x, (elevate ? elevate(p.x, p.y) : 0) + WIND_OVERLAY_Y, -p.y),
     );
-    const geom = new THREE.TubeGeometry(
-      new THREE.CatmullRomCurve3(pts),
-      Math.min(pts.length * 2, 400),
-      WIND_TUBE_RADIUS,
-      5,
-      false,
-    );
-    const mat = new THREE.MeshBasicMaterial({
-      color: windColorHex(line.speedRatio),
-      transparent: true,
-      opacity: 0.95,
+    // 누적 길이 — 튜브 링 위치(호장 비율)에서 속도비를 찾기 위해
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]));
+    const len = cum[cum.length - 1];
+    if (len < 1e-3) continue;
+    const ratioAt = (s: number): number => {
+      let lo = 0;
+      let hi = cum.length - 1;
+      while (hi - lo > 1) {
+        const m = (lo + hi) >> 1;
+        if (cum[m] <= s) lo = m;
+        else hi = m;
+      }
+      const t = cum[hi] > cum[lo] ? (s - cum[lo]) / (cum[hi] - cum[lo]) : 0;
+      return ratios[lo] + (ratios[hi] - ratios[lo]) * t;
+    };
+    const segs = Math.max(4, Math.min(600, Math.round(len / 1.5)));
+    const tube = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), segs, radius, RADIAL, false);
+    const base = positions.length / 3;
+    const pa = tube.getAttribute("position");
+    for (let i = 0; i < pa.count; i++) {
+      positions.push(pa.getX(i), pa.getY(i), pa.getZ(i));
+      const ring = Math.floor(i / (RADIAL + 1));
+      windRatioColor(ratioAt((ring / segs) * len), col);
+      colors.push(col.r, col.g, col.b);
+    }
+    const ia = tube.getIndex()!;
+    for (let i = 0; i < ia.count; i++) indices.push(base + ia.getX(i));
+    tube.dispose();
+
+    // 화살표 — 유선을 따라 일정 간격
+    const every = spacing * ARROW_EVERY;
+    for (let s = every * 0.5; s < len - radius * 4; s += every) {
+      let k = 0;
+      while (k < cum.length - 2 && cum[k + 1] < s) k++;
+      const t = (s - cum[k]) / Math.max(1e-6, cum[k + 1] - cum[k]);
+      const pos = pts[k].clone().lerp(pts[k + 1], t);
+      const dir = pts[k + 1].clone().sub(pts[k]).normalize();
+      arrows.push({ pos, dir, color: windRatioColor(ratioAt(s)) });
+    }
+  }
+
+  if (positions.length > 0) {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geom.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geom.setIndex(indices);
+    const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ vertexColors: true }));
+    mesh.name = "wind-tubes";
+    group.add(mesh);
+  }
+  if (arrows.length > 0) {
+    const cone = new THREE.ConeGeometry(radius * 3.2, radius * 9, 10);
+    const inst = new THREE.InstancedMesh(cone, new THREE.MeshBasicMaterial(), arrows.length);
+    const up = new THREE.Vector3(0, 1, 0);
+    const q = new THREE.Quaternion();
+    const m = new THREE.Matrix4();
+    const one = new THREE.Vector3(1, 1, 1);
+    arrows.forEach((a, i) => {
+      q.setFromUnitVectors(up, a.dir);
+      m.compose(a.pos, q, one);
+      inst.setMatrixAt(i, m);
+      inst.setColorAt(i, a.color);
     });
-    group.add(new THREE.Mesh(geom, mat));
+    inst.instanceMatrix.needsUpdate = true;
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    inst.name = "wind-arrows";
+    group.add(inst);
   }
   scene.add(group);
   return group;
