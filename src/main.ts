@@ -125,6 +125,8 @@ import { renderResultBoard } from "./resultboard";
 import { createUnitSunModule } from "./unitsun";
 import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
 import { createShadowPlanModule } from "./shadowplan";
+import { createShadeWalkModule } from "./shadewalk";
+import { createThermalModule } from "./thermal";
 import {
   drawLegendsOnCanvas,
   gradientFromStops,
@@ -2809,6 +2811,8 @@ const analysisCtx: AnalysisContext = {
   flyTo: (p, d) => flyToPoint(p, d),
   extras: {
     lastLbm: () => lastLbm,
+    loadWindRose: () => loadWindRose(windEpwSelect.value),
+    windRefHeight: () => Math.max(0, parseFloat(windRefHeightInput.value) || 0),
   },
   sceneOrigin: () => sceneOrigin,
   async saveFile(blob, filename, description, accept) {
@@ -2828,6 +2832,8 @@ const analysisCtx: AnalysisContext = {
 initAnalyses(analysisCtx);
 registerAnalysis(createUnitSunModule(analysisCtx));
 registerAnalysis(createShadowPlanModule(analysisCtx));
+registerAnalysis(createShadeWalkModule(analysisCtx));
+registerAnalysis(createThermalModule(analysisCtx));
 
 // ---------- 시점 저장 · JPG 내보내기 ----------
 
