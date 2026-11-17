@@ -261,8 +261,6 @@ export function createTerrainGroup(
 
 // ---------- 계단식(등고 단 쌓기) 표시 ----------
 
-/** 계단식 표시 격자 분할 상한 (축당) — 인스턴스 수 폭주 방지 */
-const STEP_MAX_CELLS_AXIS = 160;
 /** 최저 단도 이 두께만큼은 보이게 하는 바닥 여유 (m) */
 const STEP_BASE_PAD = 0.3;
 
@@ -286,59 +284,218 @@ export function quantizeToLevel(levels: number[], e: number): number {
   return lv;
 }
 
+/** 계단 단 경계선(등고선 윤곽) 색 — 첨부 사례처럼 단마다 윤곽이 보이게 */
+const STEP_EDGE_COLOR = 0x2d3440;
+
+type V2 = { x: number; y: number; z: number };
+
+/** 삼각형(볼록 다각형)을 z ≥ L (keepAbove) 또는 z < L 반공간으로 자름 — Sutherland–Hodgman */
+function clipByLevel(poly: V2[], L: number, keepAbove: boolean): V2[] {
+  const out: V2[] = [];
+  const inside = (p: V2) => (keepAbove ? p.z >= L : p.z <= L);
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    const q = poly[(i + 1) % poly.length];
+    const pin = inside(p);
+    const qin = inside(q);
+    if (pin) out.push(p);
+    if (pin !== qin && p.z !== q.z) {
+      const t = (L - p.z) / (q.z - p.z);
+      if (t > 0 && t < 1) {
+        out.push({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t, z: L });
+      }
+    }
+  }
+  return out;
+}
+
+function polyArea2(poly: V2[]): number {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    const q = poly[(i + 1) % poly.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a;
+}
+
+/** 삼각형과 수평면 z = L의 교차 선분 ("위" = z ≥ L 규칙) — 없으면 null */
+function levelCut(tri: V2[], L: number): [V2, V2] | null {
+  const pts: V2[] = [];
+  for (let i = 0; i < 3; i++) {
+    const p = tri[i];
+    const q = tri[(i + 1) % 3];
+    if (p.z >= L !== q.z >= L) {
+      const t = (L - p.z) / (q.z - p.z);
+      pts.push({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t, z: L });
+    }
+  }
+  if (pts.length !== 2) return null;
+  if (Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) < 1e-6) return null;
+  return [pts[0], pts[1]];
+}
+
+/** 순수 기하 — 테스트용으로 분리. flats: 수평 삼각형(x,y,h)들, walls: 수직 벽 [x1,y1,x2,y2,bottom,top] */
+export interface TerraceGeometry {
+  flats: number[]; // 9개씩 = 삼각형 (x,y,h)×3
+  walls: number[]; // 6개씩
+  rims: number[]; // 단 윤곽선 [x1,y1,x2,y2,h] 5개씩
+}
+
 /**
- * 계단식(콘타 단) 지형 — TIN 보간 고도를 등고 레벨로 양자화한 사각 기둥
- * InstancedMesh. 매끈한 TIN 면의 교대 표시용(시각화 전용)이며 건물 G.L.은
- * 계속 TIN 보간을 쓴다 — 실제 단지 계획의 계단식 성절토 검토 참고 표시.
+ * TIN을 등고 레벨 평면으로 잘라 등고선 곡선을 따르는 계단(테라스) 기하를 만든다.
+ * 각 조각은 quantizeToLevel과 같은 규칙(그 이하 최대 레벨)의 높이로 평평하게 놓이고,
+ * 레벨 L[j] 경계선을 따라 L[j-1]→L[j] 수직 벽, 대상 영역 외곽에는 base까지 옆면을 세운다.
+ */
+export function buildTerraceGeometry(
+  model: TerrainModel,
+  triIndices: number[],
+  levels: number[],
+  base: number,
+): TerraceGeometry {
+  const flats: number[] = [];
+  const walls: number[] = [];
+  const rims: number[] = [];
+  const pts = model.points;
+  const key = (a: V2, b: V2): string => {
+    const ka = `${Math.round(a.x * 1000)},${Math.round(a.y * 1000)}`;
+    const kb = `${Math.round(b.x * 1000)},${Math.round(b.y * 1000)}`;
+    return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+  };
+  // 같은 선분이 양쪽 삼각형에서 나오면(능선 위 레벨선 — 양쪽 다 낮음) 벽 없음
+  const cutMap = new Map<string, { a: V2; b: V2; lo: number; hi: number; n: number }>();
+  const edgeCount = new Map<string, { a: V2; b: V2; n: number }>();
+
+  for (let i = 0; i < triIndices.length; i += 3) {
+    const tri: V2[] = [pts[triIndices[i]], pts[triIndices[i + 1]], pts[triIndices[i + 2]]];
+    const zMin = Math.min(tri[0].z, tri[1].z, tri[2].z);
+    const zMax = Math.max(tri[0].z, tri[1].z, tri[2].z);
+
+    // 외곽 판별용 변 카운트
+    for (let k = 0; k < 3; k++) {
+      const a = tri[k];
+      const b = tri[(k + 1) % 3];
+      const kk = key(a, b);
+      const e = edgeCount.get(kk);
+      if (e) e.n++;
+      else edgeCount.set(kk, { a, b, n: 1 });
+    }
+
+    // 수평 조각 — 레벨 구간 [L[k], L[k+1])
+    for (let k = 0; k < levels.length; k++) {
+      const lo = levels[k];
+      const hi = k + 1 < levels.length ? levels[k + 1] : Infinity;
+      if (hi <= zMin && k + 1 < levels.length) continue;
+      if (lo > zMax) break;
+      let poly: V2[] = tri;
+      if (k > 0) poly = clipByLevel(poly, lo, true);
+      if (poly.length >= 3 && hi !== Infinity) poly = clipByLevel(poly, hi, false);
+      if (poly.length < 3 || Math.abs(polyArea2(poly)) < 1e-8) continue;
+      const ccw = polyArea2(poly) > 0;
+      for (let t = 1; t + 1 < poly.length; t++) {
+        const order = ccw ? [0, t, t + 1] : [0, t + 1, t];
+        for (const o of order) flats.push(poly[o].x, poly[o].y, lo);
+      }
+    }
+
+    // 레벨선 벽 — L[j] (j ≥ 1) 평면과의 교차
+    for (let j = 1; j < levels.length; j++) {
+      const L = levels[j];
+      if (L < zMin || L > zMax) continue;
+      const cut = levelCut(tri, L);
+      if (!cut) continue;
+      const kk = key(cut[0], cut[1]);
+      const c = cutMap.get(kk);
+      if (c) c.n++;
+      else cutMap.set(kk, { a: cut[0], b: cut[1], lo: levels[j - 1], hi: L, n: 1 });
+    }
+  }
+
+  for (const c of cutMap.values()) {
+    if (c.n !== 1) continue;
+    walls.push(c.a.x, c.a.y, c.b.x, c.b.y, c.lo, c.hi);
+    rims.push(c.a.x, c.a.y, c.b.x, c.b.y, c.hi);
+  }
+
+  // 외곽 옆면 — 변을 레벨 교차점에서 나눠 조각마다 base→단 높이
+  for (const e of edgeCount.values()) {
+    if (e.n !== 1) continue;
+    const ts = [0, 1];
+    for (const L of levels) {
+      if (e.a.z !== e.b.z) {
+        const t = (L - e.a.z) / (e.b.z - e.a.z);
+        if (t > 1e-9 && t < 1 - 1e-9) ts.push(t);
+      }
+    }
+    ts.sort((x, y) => x - y);
+    for (let k = 0; k + 1 < ts.length; k++) {
+      const t0 = ts[k];
+      const t1 = ts[k + 1];
+      if (t1 - t0 < 1e-9) continue;
+      const tm = (t0 + t1) / 2;
+      const h = quantizeToLevel(levels, e.a.z + (e.b.z - e.a.z) * tm);
+      const x0 = e.a.x + (e.b.x - e.a.x) * t0;
+      const y0 = e.a.y + (e.b.y - e.a.y) * t0;
+      const x1 = e.a.x + (e.b.x - e.a.x) * t1;
+      const y1 = e.a.y + (e.b.y - e.a.y) * t1;
+      walls.push(x0, y0, x1, y1, base, h);
+      rims.push(x0, y0, x1, y1, h);
+    }
+  }
+  return { flats, walls, rims };
+}
+
+/**
+ * 계단식(콘타 단) 지형 — TIN을 등고 레벨 평면으로 잘라, 등고선 곡선을 따라
+ * 판이 한 단씩 쌓인 모형 형태로 만든다. 주동 G.L.·오버레이는 quantizeToLevel로
+ * 같은 단 높이에 얹힌다.
  */
 function createSteppedTerrain(
   model: TerrainModel,
   sitePoly: Point2[] | null,
 ): THREE.Object3D {
   const levels = contourLevels(model);
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const p of model.points) {
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x);
-    maxY = Math.max(maxY, p.y);
-  }
-  const span = Math.max(maxX - minX, maxY - minY);
-  const cell = Math.max(1, Math.ceil(span / STEP_MAX_CELLS_AXIS));
-
-  // 1차 수집 — 대지경계·TIN hull 안쪽 셀만
-  const cells: { x: number; y: number; level: number }[] = [];
-  for (let cx = minX + cell / 2; cx < maxX; cx += cell) {
-    for (let cy = minY + cell / 2; cy < maxY; cy += cell) {
-      if (sitePoly && sitePoly.length >= 3 && !pointInPolygon(cx, cy, sitePoly)) continue;
-      const e = sampleElevation(model, cx, cy);
-      if (e === null) continue;
-      cells.push({ x: cx, y: cy, level: quantizeToLevel(levels, e) });
-    }
-  }
-
   const base = model.minZ - STEP_BASE_PAD;
-  const inst = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshLambertMaterial({ color: TERRAIN_COLOR }),
-    cells.length,
+  const geo = buildTerraceGeometry(model, clipTriangles(model, sitePoly), levels, base);
+
+  const pos: number[] = [];
+  const f = geo.flats;
+  for (let i = 0; i < f.length; i += 3) pos.push(f[i], f[i + 2], -f[i + 1]);
+  const w = geo.walls;
+  for (let i = 0; i < w.length; i += 6) {
+    const [x1, y1, x2, y2, lo, hi] = [w[i], w[i + 1], w[i + 2], w[i + 3], w[i + 4], w[i + 5]];
+    pos.push(x1, lo, -y1, x2, lo, -y2, x2, hi, -y2);
+    pos.push(x1, lo, -y1, x2, hi, -y2, x1, hi, -y1);
+  }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geom.computeVertexNormals();
+  const mesh = new THREE.Mesh(
+    geom,
+    new THREE.MeshLambertMaterial({
+      color: TERRAIN_COLOR,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
+    }),
   );
-  const mtx = new THREE.Matrix4();
-  const quat = new THREE.Quaternion();
-  const pos = new THREE.Vector3();
-  const scale = new THREE.Vector3();
-  cells.forEach((c, i) => {
-    const h = c.level - base;
-    pos.set(c.x, base + h / 2, -c.y);
-    scale.set(cell, h, cell);
-    mtx.compose(pos, quat, scale);
-    inst.setMatrixAt(i, mtx);
-  });
-  inst.instanceMatrix.needsUpdate = true;
-  inst.receiveShadow = true;
-  inst.name = "terrain-stepped";
-  return inst;
+  mesh.receiveShadow = true;
+
+  const linePos: number[] = [];
+  const r = geo.rims;
+  for (let i = 0; i < r.length; i += 5) {
+    linePos.push(r[i], r[i + 4], -r[i + 1], r[i + 2], r[i + 4], -r[i + 3]);
+  }
+  const lineGeom = new THREE.BufferGeometry();
+  lineGeom.setAttribute("position", new THREE.Float32BufferAttribute(linePos, 3));
+  const lines = new THREE.LineSegments(
+    lineGeom,
+    new THREE.LineBasicMaterial({ color: STEP_EDGE_COLOR }),
+  );
+
+  const group = new THREE.Group();
+  group.name = "terrain-stepped";
+  group.add(mesh, lines);
+  return group;
 }

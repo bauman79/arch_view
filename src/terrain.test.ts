@@ -3,6 +3,7 @@ import { parseDxfBuildings } from "./dxf";
 import {
   extractContourPoints,
   buildTerrainModel,
+  buildTerraceGeometry,
   clipTriangles,
   contourLevels,
   contourSuffixElevation,
@@ -379,5 +380,73 @@ describe("mm 도면에 m로 적은 등고선 고도", () => {
   });
   it("m 도면은 그대로", () => {
     expect(extractContourPoints(lw(0.5), "CONTOUR", 1)![0].z).toBeCloseTo(0.5);
+  });
+});
+
+describe("buildTerraceGeometry — 등고선 곡선을 따르는 계단 단", () => {
+  // 원뿔 언덕: 바깥 사각형 z=0, 반지름 10 원(16각) z=1, 반지름 5 원 z=2, 중심 z=3
+  const pts: Point3[] = [
+    { x: -20, y: -20, z: 0 },
+    { x: 20, y: -20, z: 0 },
+    { x: 20, y: 20, z: 0 },
+    { x: -20, y: 20, z: 0 },
+    { x: 0, y: 0, z: 3 },
+  ];
+  for (const [r, z] of [
+    [10, 1],
+    [5, 2],
+  ]) {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      pts.push({ x: r * Math.cos(a), y: r * Math.sin(a), z });
+    }
+  }
+  const model = buildTerrainModel(pts)!;
+  const levels = contourLevels(model);
+  const tri = Array.from(model.triangles);
+  const geo = buildTerraceGeometry(model, tri, levels, -0.3);
+
+  it("수평 조각 면적 합 = 지형 평면 면적(40×40), 높이는 그 위치의 단 레벨", () => {
+    let area = 0;
+    const f = geo.flats;
+    for (let i = 0; i < f.length; i += 9) {
+      const ax = f[i], ay = f[i + 1], bx = f[i + 3], by = f[i + 4], cx = f[i + 6], cy = f[i + 7];
+      area += ((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2;
+      expect(f[i + 2]).toBe(f[i + 5]);
+      const mx = (ax + bx + cx) / 3;
+      const my = (ay + by + cy) / 3;
+      const e = sampleElevation(model, mx, my)!;
+      expect(f[i + 2]).toBe(quantizeToLevel(levels, e));
+    }
+    expect(area).toBeCloseTo(1600, 3);
+  });
+
+  it("단 벽은 등고선을 따라 닫힌 고리 — 레벨 1 벽 길이 ≈ 반지름 10 16각형 둘레", () => {
+    const len = (lv: number) => {
+      let s = 0;
+      const w = geo.walls;
+      for (let i = 0; i < w.length; i += 6) {
+        if (w[i + 4] < 0) continue; // 외곽 옆면 제외
+        if (w[i + 5] === lv) s += Math.hypot(w[i + 2] - w[i], w[i + 3] - w[i + 1]);
+      }
+      return s;
+    };
+    const poly16 = (r: number) => 16 * 2 * r * Math.sin(Math.PI / 16);
+    expect(len(1)).toBeCloseTo(poly16(10), 3);
+    expect(len(2)).toBeCloseTo(poly16(5), 3);
+    for (let i = 0; i < geo.walls.length; i += 6) {
+      expect(geo.walls[i + 5]).toBeGreaterThan(geo.walls[i + 4]);
+    }
+  });
+
+  it("외곽 옆면은 base(-0.3)에서 바깥 단(0)까지 — 둘레 160m", () => {
+    let s = 0;
+    const w = geo.walls;
+    for (let i = 0; i < w.length; i += 6) {
+      if (w[i + 4] !== -0.3) continue;
+      expect(w[i + 5]).toBe(0);
+      s += Math.hypot(w[i + 2] - w[i], w[i + 3] - w[i + 1]);
+    }
+    expect(s).toBeCloseTo(160, 3);
   });
 });
