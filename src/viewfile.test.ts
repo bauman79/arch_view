@@ -73,3 +73,15 @@ describe(".view 저장한 시점", () => {
     expect(deserializeView(JSON.stringify(old)).savedViews!.map((v) => v.name)).toEqual(["ok"]);
   });
 });
+
+describe(".view 차양", () => {
+  it("canopies 라운드트립 + 구버전 파일은 빈 목록", () => {
+    const p = defaultProject();
+    p.canopies = [{ id: "c1", a: { x: 0, y: 0 }, b: { x: 10, y: 0 }, width: 3, height: 3.5 }];
+    const d = deserializeView(serializeView(p, null, { dxfLoadSeq: 0, sceneSeq: 0 }));
+    expect(d.canopies).toEqual(p.canopies);
+    const old = JSON.parse(serializeView(defaultProject(), null, { dxfLoadSeq: 0, sceneSeq: 0 }));
+    delete old.canopies;
+    expect(deserializeView(JSON.stringify(old)).canopies).toEqual([]);
+  });
+});

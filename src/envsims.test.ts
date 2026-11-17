@@ -59,3 +59,27 @@ describe("외부공간 열쾌적성 점수", () => {
     expect(seasonPrevailing(rose, [12, 1, 2])).toBe(14 * 22.5);
   });
 });
+
+describe("그늘보행권 — 차양", () => {
+  it("보도 위 차양이 그늘 보행 비율을 올린다 (사업 전·후는 그대로)", async () => {
+    const tower = mkBuilding("T", "계획주동", rect(500, 500, 510, 510), 2); // 멀리 떨어진 계획동
+    const p = mkProject([tower]);
+    p.siteOverlays = [{ layer: "ROAD_CL", closed: false, points: [{ x: 400, y: 400 }, { x: 600, y: 400 }] }];
+    const base = { date: "2026-08-01", startMin: 660, endMin: 960, radius: 200, threshold: 0.5, halfWidth: 5 };
+    const r0 = await runShadeWalk(p, base, () => {});
+    // 북측 보도(y=405) 위 40m 차양, 폭 4m, 높이 3.5m
+    const r1 = await runShadeWalk(
+      p,
+      { ...base, canopies: [{ id: "c", a: { x: 480, y: 405 }, b: { x: 520, y: 405 }, width: 4, height: 3.5 }] },
+      () => {},
+    );
+    expect(r0.ratioCanopy).toBe(r0.ratioAfter);
+    expect(r1.canopyCount).toBe(1);
+    expect(r1.ratioAfter).toBe(r0.ratioAfter);
+    expect(r1.ratioCanopy).toBeGreaterThan(r1.ratioAfter);
+    // 차양 바로 밑 보도 점은 대부분 그늘
+    const under = r1.points.filter((w) => Math.abs(w.p.y - 405) < 0.5 && w.p.x > 485 && w.p.x < 515);
+    expect(under.length).toBeGreaterThan(3);
+    for (const w of under) expect(w.canopy).toBeGreaterThan(0.5);
+  });
+});

@@ -222,6 +222,18 @@ export interface SavedView {
   target: [number, number, number];
 }
 
+/**
+ * 가로 차양(그늘막·캐노피) — 그늘보행권 검토용. 사용자가 지도에서 두 점을 찍어 놓는다.
+ * a→b 중심선, 폭 width(m)의 수평 판이 지반에서 height(m) 높이에 있다.
+ */
+export interface Canopy {
+  id: string;
+  a: Point2;
+  b: Point2;
+  width: number;
+  height: number;
+}
+
 export interface Project {
   site: Site;
   /** 현재 장면(3D 뷰·분석 대상)에 배치된 건물 — buildingLibrary에서 골라 인스턴스화된 것들 */
@@ -242,6 +254,8 @@ export interface Project {
   buildingLibrary: Building[];
   /** 저장한 시점 목록 — 우상단 시점 버튼 아래에 나열, .view 파일에 함께 저장 */
   savedViews: SavedView[];
+  /** 가로 차양 — 그늘보행권 시뮬레이션에 그림자로 들어간다 */
+  canopies: Canopy[];
 }
 
 export function buildingHeight(b: Building): number {
@@ -275,6 +289,7 @@ export function defaultProject(): Project {
     terrainPoints: [],
     buildingLibrary: [],
     savedViews: [],
+    canopies: [],
     analysis: {
       gridSize: 1.0,
       date: "2026-12-21",

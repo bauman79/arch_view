@@ -117,6 +117,7 @@ import {
   analysisSheets,
   initAnalyses,
   invalidateAnalyses,
+  notifyProjectLoaded,
   registerAnalysis,
   type AnalysisContext,
   type BoardEntry,
@@ -867,6 +868,7 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     for (const w of warnings) console.warn("[DXF]", w);
     if (merge) commitHistory();
     else resetHistory();
+    notifyProjectLoaded();
     if (planBuildings.length > 0) askPlanLock(planBuildings.length);
   } catch (err) {
     setStatus(`불러오기 실패: ${(err as Error).message}`);
@@ -1947,6 +1949,7 @@ function applyViewData(d: ViewFileData): void {
   project.siteOverlays = d.siteOverlays;
   project.terrainPoints = d.terrainPoints;
   if (d.savedViews) project.savedViews = d.savedViews;
+  project.canopies = d.canopies ?? [];
   renderSavedViews();
   sceneOrigin = d.sceneOrigin;
   // id 카운터는 이어서 발급 — 복원된 건물과 새 건물의 id 충돌 방지
@@ -1970,6 +1973,7 @@ function applyViewData(d: ViewFileData): void {
   updateSiteTotals();
   updateSunFromSlider();
   resetHistory();
+  notifyProjectLoaded();
 }
 
 // ---------- 새로 시작하기 (초기화) ----------
@@ -2007,6 +2011,7 @@ function resetProject(): void {
     siteOverlays: [],
     terrainPoints: [],
     savedViews: [],
+    canopies: [],
   });
   setStatus("새로 시작 — 화면이 초기화되었습니다. DXF 파일을 불러오세요.");
 }
@@ -2236,6 +2241,66 @@ function groundHit(e: PointerEvent): THREE.Vector3 | null {
   return raycaster.ray.intersectPlane(groundPlane, out) ? out : null;
 }
 
+/** 지형(보이면)·바닥 위 클릭 지점 → 도면 좌표 */
+function terrainPoint(e: PointerEvent): { x: number; y: number } | null {
+  setPointerFromEvent(e);
+  raycaster.setFromCamera(pointer, viewer.camera);
+  if (terrainVisible && viewer.terrainRoot.children.length) {
+    const hits = raycaster
+      .intersectObject(viewer.terrainRoot, true)
+      .filter((h) => {
+        if (!(h.object as THREE.Mesh).isMesh) return false;
+        for (let o: THREE.Object3D | null = h.object; o; o = o.parent) if (!o.visible) return false;
+        return true;
+      });
+    if (hits.length) return { x: hits[0].point.x, y: -hits[0].point.z };
+  }
+  const g = groundHit(e);
+  return g ? { x: g.x, y: -g.z } : null;
+}
+
+/** 지면 점 찍기 모드 — 추가 분석(차양 배치 등)이 요청 */
+let groundPick: {
+  need: number;
+  pts: { x: number; y: number }[];
+  onPoint?: (p: { x: number; y: number }, i: number) => void;
+  resolve: (pts: { x: number; y: number }[] | null) => void;
+} | null = null;
+const pickMarkers: THREE.Mesh[] = [];
+
+function clearPickMarkers(): void {
+  for (const m of pickMarkers) {
+    viewer.scene.remove(m);
+    m.geometry.dispose();
+    (m.material as THREE.Material).dispose();
+  }
+  pickMarkers.length = 0;
+}
+
+function pickGroundPoints(
+  n: number,
+  prompt: string,
+  onPoint?: (p: { x: number; y: number }, i: number) => void,
+): Promise<{ x: number; y: number }[] | null> {
+  if (groundPick) groundPick.resolve(null);
+  clearPickMarkers();
+  canvas.style.cursor = "crosshair";
+  setStatus(`${prompt} (Esc로 취소)`);
+  return new Promise((resolve) => {
+    groundPick = {
+      need: n,
+      pts: [],
+      onPoint,
+      resolve: (pts) => {
+        groundPick = null;
+        canvas.style.cursor = "";
+        clearPickMarkers();
+        resolve(pts);
+      },
+    };
+  });
+}
+
 /** 포인터의 건물 중심 기준 각도 (라디안, DXF 평면 반시계) */
 function pointerAngle(b: Building, hit: THREE.Vector3): number {
   const ctr = buildingCenter(b);
@@ -2246,6 +2311,7 @@ function pointerAngle(b: Building, hit: THREE.Vector3): number {
 canvas.addEventListener("pointerdown", (e) => {
   if (e.button !== 0) return;
   downPos = { x: e.clientX, y: e.clientY };
+  if (groundPick) return; // 점 찍기 중 — 건물 이동·회전 대신 화면 회전만
 
   // 1) 회전 그립 우선
   const planB = selectedPlanBuilding();
@@ -2369,6 +2435,30 @@ canvas.addEventListener("pointerup", (e) => {
     } catch {
       /* noop */
     }
+  }
+  // 점 찍기 모드 — 짧은 클릭 위치를 지면 점으로
+  if (groundPick) {
+    if (!pastTapSlop(e)) {
+      const p = terrainPoint(e);
+      if (p) {
+        const gp = groundPick;
+        gp.pts.push(p);
+        const elev = terrainSampler();
+        const mk = new THREE.Mesh(
+          new THREE.SphereGeometry(0.8, 16, 12),
+          new THREE.MeshBasicMaterial({ color: 0xf5a623, depthTest: false }),
+        );
+        mk.renderOrder = 999;
+        mk.position.set(p.x, (elev ? elev(p.x, p.y) : 0) + 0.5, -p.y);
+        viewer.scene.add(mk);
+        pickMarkers.push(mk);
+        gp.onPoint?.(p, gp.pts.length - 1);
+        if (gp.pts.length >= gp.need) gp.resolve(gp.pts);
+        else setStatus(`${gp.pts.length}번째 점을 찍었습니다 — 다음 점을 찍으세요 (Esc로 취소)`);
+      }
+    }
+    downPos = null;
+    return;
   }
   // 드래그가 아닌 짧은 클릭/탭이면 선택 처리 + 인접건물 면이면 그 지점 일조시간 표시
   if (!pastTapSlop(e)) {
@@ -2582,6 +2672,10 @@ compareModal.addEventListener("click", (e) => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  if (groundPick) {
+    groundPick.resolve(null);
+    setStatus("점 찍기를 취소했습니다.");
+  }
   if (!compareModal.hidden) compareModal.hidden = true;
   hideSunProbe();
   if (!lockModal.hidden) lockModal.hidden = true; // 답하지 않으면 고정 상태 유지
@@ -2873,6 +2967,7 @@ const analysisCtx: AnalysisContext = {
     windRefHeight: () => Math.max(0, parseFloat(windRefHeightInput.value) || 0),
   },
   sceneOrigin: () => sceneOrigin,
+  pickGroundPoints: (n, prompt, onPoint) => pickGroundPoints(n, prompt, onPoint),
   async saveFile(blob, filename, description, accept) {
     const picked = await saveToDesktop(blob, filename, description, accept);
     if (picked === "cancelled") {

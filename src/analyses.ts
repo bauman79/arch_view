@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { DrapeSurface } from "./drape";
 import type { LegendItem } from "./legend";
-import type { Project } from "./types";
+import type { Point2, Project } from "./types";
 import type { Viewer } from "./viewer";
 
 /**
@@ -28,6 +28,11 @@ export interface AnalysisContext {
   extras: Record<string, unknown>;
   /** DXF 원점 보정값 — 결과를 DXF로 내보낼 때 원본 좌표 복원용 */
   sceneOrigin(): { x: number; y: number } | null;
+  /**
+   * 3D 화면에서 지면(지형) 위 점을 n개 찍게 한다 — Esc로 취소하면 null.
+   * onPoint는 점을 찍을 때마다 불린다(첫 점 표시 등).
+   */
+  pickGroundPoints?(n: number, prompt: string, onPoint?: (p: Point2, i: number) => void): Promise<Point2[] | null>;
   /** 파일 저장(바탕화면 저장 창 → 공유/다운로드 폴백) */
   saveFile(blob: Blob, filename: string, description: string, accept: Record<string, string[]>): Promise<void>;
 }
@@ -76,6 +81,11 @@ export interface AnalysisModule {
   excel(): ExcelSheet | null;
   /** 추가 버튼 (예: DXF 내보내기, 입면 보기) */
   extraButtons?: { id: string; label: string; onClick: () => void }[];
+  /** 실행 버튼 위에 넣을 본문 HTML (예: 차양 목록) — onMount에서 이벤트를 단다 */
+  bodyHtml?: string;
+  onMount?(): void;
+  /** .view 열기·배치안 불러오기·DXF 불러오기 뒤 — 프로젝트 데이터로 다시 그릴 때 */
+  onProjectLoaded?(): void;
 }
 
 const modules: AnalysisModule[] = [];
@@ -110,6 +120,11 @@ export function registerAnalysis(m: AnalysisModule): void {
   const det = el("details", { class: "lp-acc", id: `${m.id}-section` });
   det.append(el("summary", {}, m.title));
   det.append(el("p", { class: "hint" }, m.hint));
+  if (m.bodyHtml) {
+    const body = el("div", { class: "an-body" });
+    body.innerHTML = m.bodyHtml;
+    det.append(body);
+  }
   const row = el("div", { class: "row" });
   const runBtn = el("button", { class: "btn primary", id: `run-${m.id}` }, m.runLabel ?? "분석 실행");
   const clearBtn = el("button", { class: "btn mini", id: `clear-${m.id}` }, "지우기");
@@ -134,6 +149,7 @@ export function registerAnalysis(m: AnalysisModule): void {
     det.append(sub);
   }
   slot.append(det);
+  m.onMount?.();
 
   runBtn.addEventListener("click", async () => {
     const ctx = ctxRef;
@@ -185,6 +201,10 @@ export function invalidateAnalyses(note: string): void {
     const box = document.getElementById(`${m.id}-summary`);
     if (box) box.innerHTML = `<p class="hint">${note}</p>`;
   }
+}
+
+export function notifyProjectLoaded(): void {
+  for (const m of modules) m.onProjectLoaded?.();
 }
 
 export function analysisLegends(): LegendItem[] {
