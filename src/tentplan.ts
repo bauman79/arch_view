@@ -2,7 +2,7 @@ import { footprintCentroid, worldFootprint } from "./buildings";
 import { pointInPolygon, polygonPolygonClosest } from "./geom2d";
 import { sitePolygons } from "./groundshadow";
 import { footprintAreaM2 } from "./massing";
-import { violations } from "./maxfloors";
+import { violations, type LegalOpt } from "./maxfloors";
 import type { Building, Point2, Project } from "./types";
 
 /**
@@ -46,6 +46,14 @@ export interface TentOptions {
   tierStep: number;
   /** 목표를 못 채우면 낮은 동을 끌어올리는 것을 허용 (스카이라인 규칙 완화) */
   allowRelax?: boolean;
+  /** 정북·채광사선은 상층부 셋백으로 대응 — 층수 제한에서 제외 */
+  skipSetback?: boolean;
+  /** 인동거리 여유 (%) — 기준의 이만큼 모자라도 허용 */
+  spacingTolPct?: number;
+}
+
+export function legalOptOf(o: TentOptions): LegalOpt {
+  return { skipSetback: o.skipSetback ?? false, spacingTol: (o.spacingTolPct ?? 0) / 100 };
 }
 
 export type MassRole = "탑상" | "판상" | "날개";
@@ -122,6 +130,8 @@ export function defaultTentOptions(siteAreaM2: number): TentOptions {
     towerMaxAspect: 1.4,
     slabRatio: 0.6,
     tierStep: 5,
+    skipSetback: true,
+    spacingTolPct: 10,
   };
 }
 
@@ -225,7 +235,10 @@ export function planTent(project: Project, legalMax: Map<string, number>, o: Ten
   const depth = depthsOf(project, plans);
   const north = northnessOf(project, plans);
   const nw = Math.min(1, Math.max(0, o.northWeight ?? 0));
-  const score = new Map(plans.map((b) => [b.id, (1 - nw) * (depth.get(b.id) ?? 0) + nw * (north.get(b.id) ?? 0.5)]));
+  const raw0 = new Map(plans.map((b) => [b.id, (1 - nw) * (depth.get(b.id) ?? 0) + nw * (north.get(b.id) ?? 0.5)]));
+  // 가장 높은 자리가 1이 되도록 다시 맞춤 — 섞으면 최고점이 1보다 작아 최고층에 못 닿는다
+  const sMin = Math.min(...raw0.values()), sMax = Math.max(...raw0.values());
+  const score = new Map([...raw0].map(([id, v]) => [id, sMax - sMin > 1e-9 ? (v - sMin) / (sMax - sMin) : 1]));
   const roles = massRoles(plans, { ...o, towerMinArea: o.towerMinArea ?? 0, towerMaxAspect: o.towerMaxAspect ?? 99 });
   const ratio = o.slabRatio ?? 1;
   const tier = o.tierStep ?? 0;
@@ -366,7 +379,10 @@ export function prepareRule(project: Project, o: TentOptions): RulePlan {
   const depth = depthsOf(project, plans);
   const north = northnessOf(project, plans);
   const nw = Math.min(1, Math.max(0, o.northWeight ?? 0));
-  const score = new Map(plans.map((b) => [b.id, (1 - nw) * (depth.get(b.id) ?? 0) + nw * (north.get(b.id) ?? 0.5)]));
+  const raw0 = new Map(plans.map((b) => [b.id, (1 - nw) * (depth.get(b.id) ?? 0) + nw * (north.get(b.id) ?? 0.5)]));
+  // 가장 높은 자리가 1이 되도록 다시 맞춤 — 섞으면 최고점이 1보다 작아 최고층에 못 닿는다
+  const sMin = Math.min(...raw0.values()), sMax = Math.max(...raw0.values());
+  const score = new Map([...raw0].map(([id, v]) => [id, sMax - sMin > 1e-9 ? (v - sMin) / (sMax - sMin) : 1]));
   const roles = massRoles(plans, o);
   const edges = new Map(plans.map((b) => [b.id, edgeFloorsOf(project, b, o)]));
   const tier = o.tierStep ?? 0;
@@ -401,6 +417,7 @@ export async function legalizeByPriority(
   rp: RulePlan,
   want: Map<string, number>,
   yieldFn: () => Promise<void> = () => Promise.resolve(),
+  opt: LegalOpt = {},
 ): Promise<Map<string, number>> {
   const sim = { ...project, buildings: project.buildings.map((b) => ({ ...b })) } as Project;
   const byId = new Map(sim.buildings.map((b) => [b.id, b]));
@@ -408,7 +425,7 @@ export async function legalizeByPriority(
   const minOf = (b: Building) => Math.max(1, b.pilotiFloors + 1);
   for (const id of ids) byId.get(id)!.floors = minOf(byId.get(id)!);
   const plansSim = ids.map((id) => byId.get(id)!);
-  const base = new Map(ids.map((id) => [id, violations(sim, byId.get(id)!, plansSim)]));
+  const base = new Map(ids.map((id) => [id, violations(sim, byId.get(id)!, plansSim, opt)]));
   const order = [...ids].sort(
     (a, b) => want.get(b)! - want.get(a)! || rp.meta.get(b)!.score - rp.meta.get(a)!.score,
   );
@@ -418,7 +435,7 @@ export async function legalizeByPriority(
     const b = byId.get(id)!;
     const bs = base.get(id)!;
     const ok = () => {
-      for (const key of violations(sim, b, plansSim).keys()) if (!bs.has(key)) return false;
+      for (const key of violations(sim, b, plansSim, opt).keys()) if (!bs.has(key)) return false;
       return true;
     };
     let lo = minOf(b), hi = Math.max(lo, want.get(id)!);
@@ -455,7 +472,7 @@ export async function planTentLegal(
   const rp = prepareRule(project, o);
   const evalAt = async (peak: number, lift: number) => {
     const want = rp.floorsAt(peak, lift);
-    const got = await legalizeByPriority(project, rp, want, yieldFn);
+    const got = await legalizeByPriority(project, rp, want, yieldFn, legalOptOf(o));
     const m = tentMetrics(project, got, o);
     return { want, got, m, metric: o.target.kind === "units" ? m.units : m.farPct ?? 0 };
   };

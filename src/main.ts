@@ -130,7 +130,7 @@ import { buildReportHtml, type ReportFigure } from "./report";
 import { makeSurface, type DrapeSurface } from "./drape";
 import { diagnoseDxfText, diagnosisHtml } from "./dxfdiag";
 import { findMaxFloors, planTypeOf, violations, type MaxFloorResult } from "./maxfloors";
-import { defaultTentOptions, planTentLegal, unitsPerFloorOf, type TentOptions, type TentResult } from "./tentplan";
+import { defaultTentOptions, legalOptOf, planTentLegal, unitsPerFloorOf, type TentOptions, type TentResult } from "./tentplan";
 import { yieldToEventLoop } from "./pv";
 import { createUnitSunModule } from "./unitsun";
 import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
@@ -1110,6 +1110,8 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
     slabRatio: num("tp-slab", 60) / 100,
     tierStep: num("tp-tier", 5),
     allowRelax: (document.getElementById("tp-relax") as HTMLInputElement).checked,
+    skipSetback: (document.getElementById("tp-skipsetback") as HTMLInputElement).checked,
+    spacingTolPct: Math.max(0, Math.min(50, num("tp-tol", 10))),
   };
   if (o.minFloors > o.maxFloors) o.minFloors = o.maxFloors;
   syncSetbackRules();
@@ -1137,9 +1139,9 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
       const plansSim = sim.buildings.filter((b) => b.type === "계획주동");
       for (const r of res.rows.filter((x) => x.capped)) {
         const b = sim.buildings.find((x) => x.id === r.id)!;
-        const now = new Set(violations(sim, b, plansSim).keys());
+        const now = new Set(violations(sim, b, plansSim, legalOptOf(o)).keys());
         b.floors += 1;
-        const extra = [...violations(sim, b, plansSim)].filter(([k]) => !now.has(k)).map(([, v]) => v);
+        const extra = [...violations(sim, b, plansSim, legalOptOf(o))].filter(([k]) => !now.has(k)).map(([, v]) => v);
         b.floors -= 1;
         const why = extra[0] ?? "인동거리";
         reasons.set(why, (reasons.get(why) ?? 0) + 1);
@@ -1215,7 +1217,12 @@ document.getElementById("tp-apply")!.addEventListener("click", () => {
   setStatus(
     `신통기획 자동 배분 적용 — ${changed.length}동, 최고 ${tpPending.peak}층` +
       (estimated ? ` · 평형 구성이 없던 ${estimated}동은 "추정" 평형으로 층당 세대를 넣었습니다` : "") +
-      ` (일조권은 따로 검토하세요)`,
+      ` (일조권은 따로 검토하세요)` +
+      (() => {
+        const n = runNorthSetbackCheck(project).checks.filter((c) => !c.pass).length;
+        const d = new Set(runDaylightCheck(project).checks.filter((c) => !c.pass).map((c) => c.buildingId)).size;
+        return n + d > 0 ? ` · 정북사선 ${n}동·채광사선 ${d}동은 상층부 셋백(단 처리)으로 맞춰야 합니다` : "";
+      })(),
   );
   tpPending = null;
   (document.getElementById("tp-apply") as HTMLElement).hidden = true;
@@ -1602,7 +1609,7 @@ function syncSetbackRules(): void {
   r.spacingNoWindowM = Math.max(0, parseFloat(spacingNoWindowMInput.value) || 8);
   r.spacingSideM = Math.max(0, parseFloat(spacingSideMInput.value) || 4);
   r.spacingNaEnabled = spacingNaInput.checked;
-  r.spacingNaHigh = Math.max(0.1, parseFloat(spacingNaHighInput.value) || 0.4);
+  { const v = parseFloat(spacingNaHighInput.value); r.spacingNaHigh = Number.isFinite(v) ? Math.max(0, v) : 0.4; }
   r.spacingNaLow = Math.max(0.1, parseFloat(spacingNaLowInput.value) || 0.5);
 }
 
@@ -1640,7 +1647,7 @@ presetBtn.addEventListener("click", () => {
   updateSetbackChecks();
   setStatus(
     seoulPresetOn
-      ? "서울시 건축조례 제60조 적용 — 채광창 벽면 인동거리 0.8배 (그 외 시행령과 동일)"
+      ? "서울시 건축조례 적용 — 채광창 벽면 인동거리 0.8배, 남측 동이 낮으면(나목) 낮은 동 높이의 0.5배 (그 외 시행령과 동일)"
       : "건축법 시행령 제86조 기본값으로 복원",
   );
 });

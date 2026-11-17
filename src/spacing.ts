@@ -408,6 +408,13 @@ function facingCandidates(plans: PlanEntry[], index: EdgeIndex): Map<number, [nu
 }
 
 /** 벽면 쌍의 적용 기준과 요구 이격거리 */
+function centroidOf(fp: Point2[]): Point2 {
+  return {
+    x: fp.reduce((a, p) => a + p.x, 0) / fp.length,
+    y: fp.reduce((a, p) => a + p.y, 0) / fp.length,
+  };
+}
+
 export interface NaRule {
   enabled: boolean;
   high: number;
@@ -425,21 +432,25 @@ function ruleFor(
   noWindowM: number,
   sideM: number,
   na?: NaRule,
+  /** src 쪽 마주보는 점 → tgt 쪽 마주보는 점 (나목 축 판정용). 없으면 두 동 중심 */
+  axis?: { from: Point2; to: Point2 },
 ): { rule: SpacingRule; required: number } {
   const winSrc = src.edgeWin[i];
   const winTgt = tgt.edgeWin[j];
   const height = Math.max(src.height, tgt.height);
-  // 나목: 남쪽 동이 낮고, 북쪽 동의 마주보는 벽이 남향(±45° — 두 동 축이 남동~남서) 채광창 벽면
+  // 나목: 마주보는 두 지점을 잇는 축이 남동~남서(정남 ±45°)이고 남쪽 동이 낮으면 — 공동주택 주된
+  // 개구부는 남향으로 본다(벽면별 창 표시 여부와 무관). 요구 거리 = max(높은 동×high, 낮은 동×low)
   if (na?.enabled && (winSrc || winTgt)) {
-    const cos45 = Math.SQRT1_2;
-    const nS = src.normals[i], nT = tgt.normals[j];
-    const srcFacesSouth = nS.x * na.south.x + nS.y * na.south.y >= cos45;
-    const tgtFacesSouth = nT.x * na.south.x + nT.y * na.south.y >= cos45;
-    const north = srcFacesSouth ? src : tgtFacesSouth ? tgt : null; // 남향 벽을 가진 쪽 = 북쪽 동
-    const northWin = north === src ? winSrc : north === tgt ? winTgt : false;
-    const south = north === src ? tgt : src;
-    if (north && northWin && south.height < north.height) {
-      return { rule: "채광(나목)", required: Math.max(north.height * na.high, south.height * na.low) };
+    const cS = axis?.from ?? centroidOf(src.fp), cT = axis?.to ?? centroidOf(tgt.fp);
+    const dx = cT.x - cS.x, dy = cT.y - cS.y;
+    const L = Math.hypot(dx, dy) || 1;
+    const along = (dx * na.south.x + dy * na.south.y) / L; // src→tgt가 남쪽으로 향하는 정도
+    if (Math.abs(along) >= Math.SQRT1_2 - 1e-9) {
+      const south = along > 0 ? tgt : src;
+      const north = along > 0 ? src : tgt;
+      if (south.height < north.height) {
+        return { rule: "채광(나목)", required: Math.max(north.height * na.high, south.height * na.low) };
+      }
     }
   }
   // 가목: 어느 한쪽이 채광창 있는 벽면(측벽 제외)이면 0.5H — 측벽에서는 비율 거리를 보지 않는다
@@ -525,6 +536,7 @@ export function runSpacingCheck(project: Project): SpacingResult {
               noWindowM,
               sideM,
               na,
+              { from: f.pSrc, to: f.pTgt },
             );
             const check: SpacingCheck = {
               aId: A.id,

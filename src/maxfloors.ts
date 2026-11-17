@@ -47,18 +47,32 @@ function bbox(b: Building) {
   };
 }
 
+/**
+ * 개략 계획용 여유 — 실제 계획은 정북·채광사선을 동 전체 층수가 아니라 상층부 셋백(단 처리)으로
+ * 맞추므로 층수 제한에서 뺄 수 있게 하고, 인동거리는 기준의 몇 %까지 모자라도 허용한다.
+ */
+export interface LegalOpt {
+  /** 정북·채광사선을 층수 제한에서 제외 */
+  skipSetback?: boolean;
+  /** 인동거리 여유 (0~1) — 거리 ≥ 기준 × (1 − tol)이면 통과 */
+  spacingTol?: number;
+}
+
 /** 이 동이 걸린 위반 목록 (키 + 기준) — 축소 프로젝트로 계산 */
-export function violations(project: Project, b: Building, neighbors?: Building[]): Map<string, LimitRule> {
+export function violations(project: Project, b: Building, neighbors?: Building[], opt: LegalOpt = {}): Map<string, LimitRule> {
   const out = new Map<string, LimitRule>();
   const solo = { ...project, buildings: [b] };
-  const north = runNorthSetbackCheck(solo).checks.find((c) => c.buildingId === b.id);
-  if (north && !north.pass) out.set("N", "정북사선");
-  for (const c of runDaylightCheck(solo).checks) {
-    if (c.buildingId === b.id && !c.pass) out.set(`D:${c.point.x.toFixed(2)},${c.point.y.toFixed(2)}`, "채광사선");
+  if (!opt.skipSetback) {
+    const north = runNorthSetbackCheck(solo).checks.find((c) => c.buildingId === b.id);
+    if (north && !north.pass) out.set("N", "정북사선");
+    for (const c of runDaylightCheck(solo).checks) {
+      if (c.buildingId === b.id && !c.pass) out.set(`D:${c.point.x.toFixed(2)},${c.point.y.toFixed(2)}`, "채광사선");
+    }
   }
+  const tol = Math.min(0.9, Math.max(0, opt.spacingTol ?? 0));
   const near = { ...project, buildings: neighbors ? [b, ...neighbors.filter((x) => x.id !== b.id)] : project.buildings };
   for (const c of runSpacingCheck(near).checks) {
-    if ((c.aId === b.id || c.bId === b.id) && !c.pass) {
+    if ((c.aId === b.id || c.bId === b.id) && c.distance < c.required * (1 - tol) - 1e-9) {
       const other = c.aId === b.id ? c.bId : c.aId;
       out.set(`S:${other}:${c.rule}:${((c.pa.x + c.pb.x) / 2).toFixed(1)},${((c.pa.y + c.pb.y) / 2).toFixed(1)}`, "인동거리");
     }

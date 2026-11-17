@@ -186,7 +186,8 @@ export function statutorySetbackRules(): SetbackRules {
  * 도시형생활주택 0.25배 등 세부 특례는 미반영 — 필요 시 값을 직접 수정.
  */
 export function seoulSetbackRules(): SetbackRules {
-  return { ...statutorySetbackRules(), spacingRatioWindow: 0.8 };
+  // 서울시: 가목 0.8배, 나목은 낮은 동 높이의 0.5배만 (높은 동 기준 없음)
+  return { ...statutorySetbackRules(), spacingRatioWindow: 0.8, spacingNaHigh: 0, spacingNaLow: 0.5 };
 }
 
 /** 일조권(수인한도) 판정 기준 — 대법원 판례상 09~15시 연속 2h 또는 08~16시 총 4h */

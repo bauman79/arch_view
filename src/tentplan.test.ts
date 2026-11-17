@@ -138,7 +138,7 @@ describe("우선순위 법규 맞춤", async () => {
     const p = mkProject([slab, tower]);
     p.siteOverlays = [{ layer: "SITE_BOUNDARY", closed: true, points: rect(-40, -40, 70, 110) }];
     p.site.siteAreaM2 = 16500;
-    const o = { ...defaultTentOptions(16500), target: { kind: "far" as const, value: 80 }, retailM2: 0, amenityPerUnit: 0, minFloors: 5, maxFloors: 40, tierStep: 0 };
+    const o = { ...defaultTentOptions(16500), target: { kind: "far" as const, value: 80 }, retailM2: 0, amenityPerUnit: 0, minFloors: 5, maxFloors: 40, tierStep: 0, skipSetback: false, spacingTolPct: 0 };
     const r = await planTentLegal(p, o);
     const f = (id: string) => r.rows.find((x) => x.id === id)!.floors;
     expect(r.rows.find((x) => x.id === "T")!.role).toBe("탑상");
@@ -147,5 +147,22 @@ describe("우선순위 법규 맞춤", async () => {
     p.buildings.find((b) => b.id === "S")!.floors = f("S");
     expect(failingRule(p, p.buildings[0])).toBeNull();
     expect(failingRule(p, p.buildings[1])).toBeNull();
+  });
+});
+
+describe("법규 여유", async () => {
+  const { planTentLegal } = await import("./tentplan");
+  it("인동거리 여유 %를 주면 더 높일 수 있다", async () => {
+    const slab = mkBuilding("S", "계획주동", rect(0, 0, 30, 11), 1, { windowSegments: [[{ x: 25, y: 11 }, { x: 5, y: 11 }]] });
+    // 탑을 판상 동쪽(동서 배치)에 둬서 나목이 아닌 가목이 걸리게
+    const tower = mkBuilding("T", "계획주동", rect(50, -5, 75, 20), 1, { windowSegments: [[{ x: 50, y: 0 }, { x: 50, y: 15 }]] });
+    const p = mkProject([slab, tower]);
+    p.siteOverlays = [{ layer: "SITE_BOUNDARY", closed: true, points: rect(-40, -40, 120, 60) }];
+    p.site.siteAreaM2 = 16000;
+    const base = { ...defaultTentOptions(16000), target: { kind: "far" as const, value: 500 }, retailM2: 0, amenityPerUnit: 0, minFloors: 5, maxFloors: 40, tierStep: 0, skipSetback: true };
+    const strict = await planTentLegal(p, { ...base, spacingTolPct: 0 });
+    const loose = await planTentLegal(p, { ...base, spacingTolPct: 20 });
+    const f = (r: typeof strict) => r.rows.find((x) => x.id === "T")!.floors;
+    expect(f(loose)).toBeGreaterThan(f(strict));
   });
 });
