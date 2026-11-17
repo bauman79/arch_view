@@ -9,7 +9,6 @@ import {
   makeGrid,
   polygonMask,
   sitePolygons,
-  segmentsToLines,
   segmentsToRibbon,
   shadowCasters,
   shadowMask,
@@ -178,7 +177,8 @@ export function createShadowPlanOverlay(r: ShadowPlanResult, elevate: ((x: numbe
   g.name = "shadow-plan";
   r.hourly.forEach((h, i) => {
     const col = hourColor(i, r.hourly.length);
-    g.add(segmentsToLines(h.segs, col, elevate, 0.3));
+    // 1px GL 선은 멀리서 지면에 묻히므로 얇은 띠로 그린다
+    g.add(segmentsToRibbon(h.segs, col, 0.35, elevate, 0.35));
     if (h.label) {
       const sp = textSprite(`${h.minutes / 60}시`, hexCss(col), 5);
       sp.position.set(h.label.x, (elevate ? elevate(h.label.x, h.label.y) : 0) + 4, -h.label.y);
@@ -186,7 +186,7 @@ export function createShadowPlanOverlay(r: ShadowPlanResult, elevate: ((x: numbe
     }
   });
   r.iso.forEach((s, i) => {
-    g.add(segmentsToRibbon(s.segs, ISO_COLORS[i % ISO_COLORS.length], 0.9, elevate, 0.4 + i * 0.02));
+    g.add(segmentsToRibbon(s.segs, ISO_COLORS[i % ISO_COLORS.length], 1.0, elevate, 0.45 + i * 0.03));
   });
   return g;
 }

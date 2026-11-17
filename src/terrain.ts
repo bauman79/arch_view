@@ -316,9 +316,10 @@ export function createTerrainGroup(
     new THREE.MeshLambertMaterial({
       color: TERRAIN_COLOR,
       side: THREE.DoubleSide,
-      // 지면판(y=-0.05)·대지 채움(0.02)과 깊이 근접 시 z-fighting 방지 (buildings.ts 참고)
+      // 지면판(y=-0.05)과 깊이 근접 시 z-fighting 방지 — 고정 보정만(기울기 비례 보정은
+      // 멀리서 비스듬히 볼 때 지형이 위에 얹은 채움·선을 덮어버린다)
       polygonOffset: true,
-      polygonOffsetFactor: -2,
+      polygonOffsetFactor: 0,
       polygonOffsetUnits: -2,
     }),
   );

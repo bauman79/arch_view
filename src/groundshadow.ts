@@ -277,7 +277,17 @@ export function segmentsToRibbon(
   }
   const geom = new THREE.BufferGeometry();
   geom.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  return new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+  return new THREE.Mesh(
+    geom,
+    new THREE.MeshBasicMaterial({
+      color,
+      side: THREE.DoubleSide,
+      // 지면 채움(고정 보정 -8 이하)보다 확실히 앞에 — 멀리서도 보이게
+      polygonOffset: true,
+      polygonOffsetFactor: 0,
+      polygonOffsetUnits: -24,
+    }),
+  );
 }
 
 /**
@@ -323,7 +333,7 @@ export function gridHeatmap(
         depthWrite: false,
         side: THREE.DoubleSide,
         polygonOffset: true,
-        polygonOffsetFactor: -6,
+        polygonOffsetFactor: 0,
         polygonOffsetUnits: -12,
       }),
       col,

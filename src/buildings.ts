@@ -133,8 +133,10 @@ function exactDrapeFill(
     new THREE.MeshLambertMaterial({
       color,
       side: THREE.DoubleSide,
+      // 기울기 비례 보정(factor)은 멀리서 비스듬히 볼수록 커져 위에 그린 선·띠까지 덮는다 —
+      // 지형과 같은 면에 정확히 얹었으므로 고정 보정(units)만 쓴다
       polygonOffset: true,
-      polygonOffsetFactor: offset,
+      polygonOffsetFactor: 0,
       polygonOffsetUnits: offset * 2,
     }),
   );

@@ -365,7 +365,7 @@ export function createSunHoursMapOverlay(
           pos,
           new THREE.MeshBasicMaterial({
             vertexColors: true, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide,
-            polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12,
+            polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: -12,
           }),
           col,
         ),
