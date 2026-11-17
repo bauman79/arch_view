@@ -1087,6 +1087,64 @@
         border-color: #3a5580;
       }
 
+      #view-presets .vp-sep {
+        height: 1px;
+        background: #2a3b5c;
+        margin: 2px 0;
+      }
+
+      #saved-views {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-height: 40vh;
+        overflow-y: auto;
+      }
+
+      #view-presets .saved-view {
+        position: relative;
+        display: flex;
+      }
+
+      #view-presets .saved-view .btn {
+        flex: 1;
+        max-width: 96px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      #view-presets .sv-del {
+        position: absolute;
+        top: -5px;
+        right: -5px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        border: 1px solid #3a5580;
+        background: #1b2b48;
+        color: #cbd5e1;
+        font-size: 11px;
+        line-height: 13px;
+        padding: 0;
+        cursor: pointer;
+        display: none;
+      }
+
+      #view-presets .saved-view:hover .sv-del {
+        display: block;
+      }
+
+      @media (hover: none) {
+        #view-presets .sv-del {
+          display: block;
+        }
+      }
+
+      #view-presets .btn.vp-action {
+        color: #f0b45a;
+      }
+
       #view-presets .btn.active {
         border-color: #e0921a;
         color: #f0b45a;
@@ -2075,6 +2133,10 @@
             <button class="btn mini" data-view="south">남측</button>
             <button class="btn mini" data-view="east">동측</button>
             <button class="btn mini" data-view="west">서측</button>
+            <div class="vp-sep"></div>
+            <div id="saved-views"></div>
+            <button class="btn mini vp-action" id="save-cam-view" title="지금 보고 있는 시점을 버튼으로 저장">＋ 뷰 저장</button>
+            <button class="btn mini vp-action" id="export-jpg" title="지금 화면을 JPG 이미지로 저장">JPG 저장</button>
           </div>
           <div id="time-overlay">
             <span id="time-label">12:30</span>

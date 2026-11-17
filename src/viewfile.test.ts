@@ -57,3 +57,19 @@ describe(".view 직렬화 라운드트립", () => {
     expect(() => deserializeView(text)).toThrow(/footprint 이상/);
   });
 });
+
+describe(".view 저장한 시점", () => {
+  it("savedViews 라운드트립 + 구버전 파일은 빈 목록 + 형식이 깨진 항목은 제외", () => {
+    const p = defaultProject();
+    p.savedViews = [{ name: "남측 조감", position: [1, 2, 3], target: [4, 5, 6] }];
+    const d = deserializeView(serializeView(p, null, { dxfLoadSeq: 0, sceneSeq: 0 }));
+    expect(d.savedViews).toEqual(p.savedViews);
+
+    const old = JSON.parse(serializeView(defaultProject(), null, { dxfLoadSeq: 0, sceneSeq: 0 }));
+    delete old.savedViews;
+    expect(deserializeView(JSON.stringify(old)).savedViews).toEqual([]);
+
+    old.savedViews = [{ name: "x", position: [1, 2] }, { name: "ok", position: [0, 0, 0], target: [0, 0, 0] }];
+    expect(deserializeView(JSON.stringify(old)).savedViews!.map((v) => v.name)).toEqual(["ok"]);
+  });
+});

@@ -215,6 +215,13 @@ export interface AnalysisSettings {
   facility?: FacilitySunSettings;
 }
 
+/** 사용자가 저장한 카메라 시점 — three 좌표(x=동, y=높이, z=-북) */
+export interface SavedView {
+  name: string;
+  position: [number, number, number];
+  target: [number, number, number];
+}
+
 export interface Project {
   site: Site;
   /** 현재 장면(3D 뷰·분석 대상)에 배치된 건물 — buildingLibrary에서 골라 인스턴스화된 것들 */
@@ -233,6 +240,8 @@ export interface Project {
    * 인접건물(ADJ_BLDG)은 라이브러리를 거치지 않고 로드 즉시 buildings에 추가된다.
    */
   buildingLibrary: Building[];
+  /** 저장한 시점 목록 — 우상단 시점 버튼 아래에 나열, .view 파일에 함께 저장 */
+  savedViews: SavedView[];
 }
 
 export function buildingHeight(b: Building): number {
@@ -265,6 +274,7 @@ export function defaultProject(): Project {
     siteOverlays: [],
     terrainPoints: [],
     buildingLibrary: [],
+    savedViews: [],
     analysis: {
       gridSize: 1.0,
       date: "2026-12-21",

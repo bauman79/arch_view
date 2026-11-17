@@ -1825,6 +1825,8 @@ function applyViewData(d: ViewFileData): void {
   project.buildingLibrary = d.buildingLibrary;
   project.siteOverlays = d.siteOverlays;
   project.terrainPoints = d.terrainPoints;
+  if (d.savedViews) project.savedViews = d.savedViews;
+  renderSavedViews();
   sceneOrigin = d.sceneOrigin;
   // id 카운터는 이어서 발급 — 복원된 건물과 새 건물의 id 충돌 방지
   dxfLoadSeq = Math.max(dxfLoadSeq, d.counters.dxfLoadSeq);
@@ -1883,6 +1885,7 @@ function resetProject(): void {
     buildingLibrary: [],
     siteOverlays: [],
     terrainPoints: [],
+    savedViews: [],
   });
   setStatus("새로 시작 — 화면이 초기화되었습니다. DXF 파일을 불러오세요.");
 }
@@ -2397,7 +2400,10 @@ function refreshSchemeList(): void {
   renderSchemeList(listSchemes(), {
     onLoad: (rec) => {
       try {
-        applyViewData(deserializeView(rec.view));
+        // 배치안 불러오기는 배치만 바꾼다 — 저장한 시점 목록은 지금 것을 유지
+        const plan = deserializeView(rec.view);
+        delete plan.savedViews;
+        applyViewData(plan);
         setStatus(
           `배치안 "${rec.name}" 불러옴 — 장면 ${project.buildings.length}동 · ` +
             `${rec.metrics.totalUnits}세대 (저장 ${formatSavedAt(rec.savedAt)})`,
@@ -2484,9 +2490,93 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("#view-presets [d
   });
 }
 
+// ---------- 시점 저장 · JPG 내보내기 ----------
+
+const savedViewsEl = document.getElementById("saved-views") as HTMLElement;
+
+function renderSavedViews(): void {
+  savedViewsEl.replaceChildren();
+  project.savedViews.forEach((v, i) => {
+    const row = document.createElement("div");
+    row.className = "saved-view";
+    const go = document.createElement("button");
+    go.className = "btn mini";
+    go.textContent = v.name;
+    go.title = "이 시점으로 이동 (더블클릭: 이름 바꾸기)";
+    go.addEventListener("click", () => {
+      viewer.flyTo(v.position, v.target);
+      for (const b of document.querySelectorAll("#view-presets .btn")) {
+        b.classList.toggle("active", b === go);
+      }
+      setStatus(`시점: ${v.name}`);
+    });
+    go.addEventListener("dblclick", () => {
+      const name = prompt("시점 이름", v.name)?.trim();
+      if (name) {
+        v.name = name;
+        renderSavedViews();
+      }
+    });
+    const del = document.createElement("button");
+    del.className = "sv-del";
+    del.textContent = "×";
+    del.title = "이 시점 삭제";
+    del.addEventListener("click", () => {
+      project.savedViews.splice(i, 1);
+      renderSavedViews();
+      setStatus(`시점 "${v.name}" 삭제`);
+    });
+    row.append(go, del);
+    savedViewsEl.append(row);
+  });
+}
+
+document.getElementById("save-cam-view")!.addEventListener("click", () => {
+  let n = project.savedViews.length + 1;
+  while (project.savedViews.some((v) => v.name === `뷰 ${n}`)) n++;
+  const name = `뷰 ${n}`;
+  project.savedViews.push({ name, ...viewer.getCameraView() });
+  renderSavedViews();
+  setStatus(`지금 시점을 "${name}"(으)로 저장했습니다 — 버튼을 누르면 이 시점으로 돌아옵니다 (더블클릭으로 이름 변경, .view 저장 시 함께 저장)`);
+});
+
+document.getElementById("export-jpg")!.addEventListener("click", async () => {
+  const stamp = new Date();
+  const pad = (x: number) => String(x).padStart(2, "0");
+  const filename =
+    `arch_view_${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}_` +
+    `${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}.jpg`;
+  try {
+    const blob = await viewer.captureJpeg();
+    const picked = await saveToDesktop(blob, filename, "JPG 이미지", {
+      "image/jpeg": [".jpg", ".jpeg"],
+    });
+    if (picked === "cancelled") {
+      setStatus("이미지 저장 취소됨");
+      return;
+    }
+    if (picked !== "unsupported") {
+      setStatus(`화면 이미지 저장 — ${picked}`);
+      return;
+    }
+    const outcome = await shareOrDownload(
+      new File([blob], filename, { type: "image/jpeg" }),
+      "arch_view 화면",
+    );
+    setStatus(
+      outcome === "cancelled" ? "공유 취소됨" : `화면 이미지 ${outcome === "shared" ? "공유함" : "저장"} — ${filename}`,
+    );
+  } catch (err) {
+    setStatus(`이미지 저장 실패: ${(err as Error).message}`);
+    console.error(err);
+  }
+});
+
+renderSavedViews();
+
 // 사용자가 직접 회전·이동하면 프리셋 표시를 해제 (더 이상 그 시점이 아니므로)
 viewer.controls.addEventListener("start", () => {
-  for (const b of document.querySelectorAll("#view-presets [data-view]")) {
+  for (const b of document.querySelectorAll("#view-presets .btn")) {
     b.classList.remove("active");
   }
 });

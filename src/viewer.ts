@@ -239,6 +239,71 @@ export class Viewer {
     this.controls.update();
   }
 
+  /** 현재 카메라 시점 (위치·바라보는 점) */
+  getCameraView(): { position: [number, number, number]; target: [number, number, number] } {
+    const p = this.camera.position;
+    const t = this.controls.target;
+    return { position: [p.x, p.y, p.z], target: [t.x, t.y, t.z] };
+  }
+
+  private viewAnim = 0;
+
+  /** 저장한 시점으로 부드럽게 이동 (0.6초) */
+  flyTo(position: [number, number, number], target: [number, number, number]): void {
+    const p0 = this.camera.position.clone();
+    const t0 = this.controls.target.clone();
+    const p1 = new THREE.Vector3(...position);
+    const t1 = new THREE.Vector3(...target);
+    const start = performance.now();
+    const DUR = 600;
+    const id = ++this.viewAnim;
+    const step = () => {
+      if (id !== this.viewAnim) return; // 새 이동이 시작되면 이전 애니메이션 중단
+      const k = Math.min(1, (performance.now() - start) / DUR);
+      const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2; // easeInOutQuad
+      this.camera.position.lerpVectors(p0, p1, e);
+      this.controls.target.lerpVectors(t0, t1, e);
+      this.controls.update();
+      if (k < 1) requestAnimationFrame(step);
+      else this.viewAnim++; // 완료 — 아래 안전장치가 다시 손대지 않게
+    };
+    step();
+    // rAF가 멈춘 환경(백그라운드 탭 등)에서도 최종 시점에는 반드시 도착하도록
+    setTimeout(() => {
+      if (id !== this.viewAnim) return;
+      this.camera.position.copy(p1);
+      this.controls.target.copy(t1);
+      this.controls.update();
+      this.viewAnim++;
+    }, DUR + 150);
+  }
+
+  /**
+   * 지금 화면을 JPG로 캡처 — 화면 크기의 최대 2배 해상도(긴 변 4096px 이하).
+   * 렌더 직후 같은 작업 안에서 toBlob을 호출해 preserveDrawingBuffer 없이도 캡처된다.
+   */
+  captureJpeg(quality = 0.92): Promise<Blob> {
+    const r = this.renderer;
+    const prev = r.getPixelRatio();
+    const w = this.container.clientWidth;
+    const h = this.container.clientHeight;
+    const ratio = Math.max(prev, Math.min(2, 4096 / Math.max(w, h, 1)));
+    r.setPixelRatio(ratio);
+    r.setSize(w, h);
+    this.controls.update();
+    r.render(this.scene, this.camera);
+    const blob = new Promise<Blob>((resolve, reject) => {
+      r.domElement.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("이미지 캡처 실패"))),
+        "image/jpeg",
+        quality,
+      );
+    });
+    r.setPixelRatio(prev);
+    r.setSize(w, h);
+    return blob;
+  }
+
   private onResize(): void {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
