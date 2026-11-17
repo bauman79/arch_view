@@ -1150,6 +1150,14 @@
         color: #f0b45a;
       }
 
+      /* 층수 도구 */
+      .ft-h { font-size: 14px; margin: 12px 0 4px; }
+      .ft-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      .ft-table th, .ft-table td { border-bottom: 1px solid #e2e8f0; padding: 3px 6px; text-align: left; }
+      .ft-table input { width: 60px; }
+      .ft-table .up { color: #166534; font-weight: 600; }
+      .ft-table .down { color: #b91c1c; font-weight: 600; }
+
       /* 도면 진단표 */
       .diag-checks { list-style: none; padding: 0; margin: 6px 0; font-size: 13px; }
       .diag-checks li { padding: 2px 0; }
@@ -2005,6 +2013,9 @@
         <aside id="left-panel">
           <section class="lp-section grow">
             <div class="lp-heading">건물 목록</div>
+            <div class="row">
+              <button id="floors-tool-btn" class="btn mini block">층수 일괄 입력 · 법규 최대 층수</button>
+            </div>
             <div id="building-list">
               <p class="hint">파일 → DXF 불러오기로 시작하세요.</p>
             </div>
@@ -2383,6 +2394,28 @@
           <button id="reset-save-first" class="btn primary">저장 후 초기화</button>
           <button id="reset-discard" class="btn">저장 안 함</button>
           <button id="reset-cancel" class="btn">취소</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 층수 일괄 입력 · 최대 층수 ================= -->
+    <div id="floors-modal" class="modal-overlay" hidden>
+      <div class="modal-box" style="max-width:760px;width:92vw">
+        <h2>층수 일괄 입력 · 법규 최대 층수</h2>
+        <h3 class="ft-h">타입별 일괄 입력</h3>
+        <p class="hint">타입은 레이어 이름(PLAN_A_1 → A)으로 묶습니다. 층수·필로티를 넣고 "적용"을 누르세요.</p>
+        <div id="floors-types" style="max-height:28vh;overflow:auto"></div>
+        <h3 class="ft-h">법규 최대 층수 자동 찾기</h3>
+        <p class="hint">정북사선·채광사선·인동거리(현재 기준값)를 모두 만족하는 최대 층수를 동마다 찾습니다. 일조권(인접건물)은 결과 층수로 따로 검토하세요.</p>
+        <div class="row">
+          <label for="mf-target">대상</label><select id="mf-target"></select>
+          <label for="mf-cap">한도(층)</label><input type="number" id="mf-cap" value="35" min="1" max="99" step="1" style="width:70px" />
+          <button id="mf-run" class="btn primary">찾기</button>
+        </div>
+        <div id="mf-result" style="max-height:30vh;overflow:auto"></div>
+        <div class="row">
+          <button id="mf-apply" class="btn primary" hidden>찾은 층수 적용</button>
+          <button id="floors-close" class="btn">닫기</button>
         </div>
       </div>
     </div>

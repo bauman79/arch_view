@@ -126,6 +126,8 @@ import {
 import { renderResultBoard } from "./resultboard";
 import { makeSurface, type DrapeSurface } from "./drape";
 import { diagnoseDxfText, diagnosisHtml } from "./dxfdiag";
+import { findMaxFloors, planTypeOf, type MaxFloorResult } from "./maxfloors";
+import { yieldToEventLoop } from "./pv";
 import { createUnitSunModule } from "./unitsun";
 import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
 import { createShadowPlanModule } from "./shadowplan";
@@ -875,6 +877,155 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     console.error(err);
   }
 }
+
+// ---------- 층수 일괄 입력 · 법규 최대 층수 ----------
+const floorsModal = document.getElementById("floors-modal") as HTMLElement;
+let mfPending: MaxFloorResult[] | null = null;
+
+function planBuildingsByType(): Map<string, Building[]> {
+  const m = new Map<string, Building[]>();
+  for (const b of project.buildings) {
+    if (b.type !== "계획주동") continue;
+    const t = planTypeOf(b.name);
+    const l = m.get(t);
+    if (l) l.push(b);
+    else m.set(t, [b]);
+  }
+  return new Map([...m].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/** 층수·필로티 바뀐 동들 다시 그리기 + 검토 갱신 + 되돌리기 기록 */
+function afterFloorsChanged(changed: Building[]): void {
+  for (const b of changed) rebuildOne(b);
+  updateRotationHandle();
+  invalidateAnalysis();
+  updateSetbackChecks();
+  updateSiteTotals();
+  refreshList();
+  commitHistory();
+}
+
+function renderFloorsTypes(): void {
+  const host = document.getElementById("floors-types")!;
+  const groups = planBuildingsByType();
+  if (groups.size === 0) {
+    host.innerHTML = `<p class="hint">장면에 계획주동이 없습니다.</p>`;
+    return;
+  }
+  const range = (bs: Building[]) => {
+    const fs = bs.map((b) => b.floors);
+    const lo = Math.min(...fs), hi = Math.max(...fs);
+    return lo === hi ? `${lo}층` : `${lo}~${hi}층`;
+  };
+  const all = [...groups.values()].flat();
+  const rows: [string, Building[]][] = [["전체", all], ...groups];
+  host.innerHTML =
+    `<table class="ft-table"><tr><th>타입</th><th>동 수</th><th>현재</th><th>층수</th><th>필로티</th><th></th></tr>` +
+    rows
+      .map(
+        ([t, bs], i) =>
+          `<tr><td>${t === "전체" ? "<b>전체 계획주동</b>" : `${t} 타입`}</td><td>${bs.length}</td><td>${range(bs)}</td>` +
+          `<td><input type="number" min="1" max="99" step="1" data-ft-floors="${i}" placeholder="${bs[0].floors}" /></td>` +
+          `<td><input type="number" min="0" max="5" step="1" data-ft-piloti="${i}" placeholder="${bs[0].pilotiFloors}" /></td>` +
+          `<td><button class="btn mini" data-ft-apply="${i}">적용</button></td></tr>`,
+      )
+      .join("") +
+    `</table>`;
+  for (const btn of host.querySelectorAll<HTMLButtonElement>("[data-ft-apply]")) {
+    btn.addEventListener("click", () => {
+      const i = Number(btn.dataset.ftApply);
+      const bs = rows[i][1];
+      const fIn = host.querySelector<HTMLInputElement>(`[data-ft-floors="${i}"]`)!;
+      const pIn = host.querySelector<HTMLInputElement>(`[data-ft-piloti="${i}"]`)!;
+      const f = parseInt(fIn.value, 10);
+      const pl = parseInt(pIn.value, 10);
+      if (!Number.isFinite(f) && !Number.isFinite(pl)) {
+        setStatus("층수나 필로티 값을 넣으세요.");
+        return;
+      }
+      for (const b of bs) {
+        if (Number.isFinite(f)) b.floors = Math.max(1, Math.min(99, f));
+        if (Number.isFinite(pl)) b.pilotiFloors = Math.max(0, Math.min(b.floors - 1, pl));
+      }
+      afterFloorsChanged(bs);
+      setStatus(`${rows[i][0] === "전체" ? "전체 계획주동" : `${rows[i][0]} 타입`} ${bs.length}동 — ` +
+        (Number.isFinite(f) ? `${f}층` : "") + (Number.isFinite(pl) ? ` 필로티 ${pl}층` : "") + " 적용");
+      renderFloorsTypes();
+    });
+  }
+  const sel = document.getElementById("mf-target") as HTMLSelectElement;
+  sel.innerHTML = rows.map(([t], i) => `<option value="${i}">${t === "전체" ? "전체 계획주동" : `${t} 타입`}</option>`).join("");
+}
+
+document.getElementById("floors-tool-btn")!.addEventListener("click", () => {
+  renderFloorsTypes();
+  mfPending = null;
+  (document.getElementById("mf-result") as HTMLElement).innerHTML = "";
+  (document.getElementById("mf-apply") as HTMLElement).hidden = true;
+  floorsModal.hidden = false;
+});
+document.getElementById("floors-close")!.addEventListener("click", () => {
+  floorsModal.hidden = true;
+});
+
+document.getElementById("mf-run")!.addEventListener("click", async () => {
+  const groups = planBuildingsByType();
+  const rows: Building[][] = [[...groups.values()].flat(), ...groups.values()];
+  const idx = Number((document.getElementById("mf-target") as HTMLSelectElement).value) || 0;
+  const targets = rows[idx] ?? [];
+  if (targets.length === 0) return;
+  const cap = Math.max(1, Math.min(99, parseInt((document.getElementById("mf-cap") as HTMLInputElement).value, 10) || 35));
+  syncSetbackRules();
+  // 실제 배치를 건드리지 않도록 복제본에서 찾는다
+  const sim = { ...project, buildings: structuredClone(project.buildings) } as typeof project;
+  const runBtn = document.getElementById("mf-run") as HTMLButtonElement;
+  runBtn.disabled = true;
+  const out = document.getElementById("mf-result") as HTMLElement;
+  try {
+    const res = await findMaxFloors(
+      sim,
+      targets.map((b) => b.id),
+      cap,
+      (d, t) => {
+        out.innerHTML = `<p class="hint">찾는 중… ${Math.round((d / t) * 100)}%</p>`;
+      },
+      yieldToEventLoop,
+    );
+    mfPending = res;
+    out.innerHTML =
+      `<table class="ft-table"><tr><th>동</th><th>현재</th><th>최대</th><th>더 올리면 걸리는 기준</th><th>층수와 무관한 기존 위반</th></tr>` +
+      res
+        .map(
+          (r) =>
+            `<tr><td>${r.name}</td><td>${r.before}층</td>` +
+            `<td class="${r.max > r.before ? "up" : r.max < r.before ? "down" : ""}">${r.max}층</td><td>${r.limit === "한도" ? `한도(${cap}층)` : r.limit}</td>` +
+            `<td class="${r.fixedViolations ? "down" : ""}">${r.fixedViolations ? `${r.fixedViolations}건 — 배치 조정 필요` : "—"}</td></tr>`,
+        )
+        .join("") +
+      `</table><p class="hint">합계 ${res.reduce((s, r) => s + r.before, 0)}층 → ${res.reduce((s, r) => s + r.max, 0)}층 (동별 층수 합). ` +
+      `"기존 위반"은 측벽 4m·창 없는 벽 8m처럼 높이와 무관한 거리 기준이라 층수로 해결되지 않습니다.</p>`;
+    (document.getElementById("mf-apply") as HTMLElement).hidden = false;
+  } finally {
+    runBtn.disabled = false;
+  }
+});
+
+document.getElementById("mf-apply")!.addEventListener("click", () => {
+  if (!mfPending) return;
+  const changed: Building[] = [];
+  for (const r of mfPending) {
+    const b = project.buildings.find((x) => x.id === r.id);
+    if (b && b.floors !== r.max) {
+      b.floors = r.max;
+      changed.push(b);
+    }
+  }
+  afterFloorsChanged(changed);
+  setStatus(`법규 최대 층수 적용 — ${changed.length}동 변경 (일조권은 따로 검토하세요)`);
+  mfPending = null;
+  (document.getElementById("mf-apply") as HTMLElement).hidden = true;
+  renderFloorsTypes();
+});
 
 // ---------- 도면 진단표 ----------
 let lastDiagHtml: string | null = null;
@@ -2676,6 +2827,7 @@ document.addEventListener("keydown", (e) => {
     groundPick.resolve(null);
     setStatus("점 찍기를 취소했습니다.");
   }
+  if (!floorsModal.hidden) floorsModal.hidden = true;
   if (!compareModal.hidden) compareModal.hidden = true;
   hideSunProbe();
   if (!lockModal.hidden) lockModal.hidden = true; // 답하지 않으면 고정 상태 유지
