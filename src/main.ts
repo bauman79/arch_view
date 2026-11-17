@@ -266,7 +266,11 @@ function applyTerrainVisibility(): void {
 function terrainSampler(): ((x: number, y: number) => number) | undefined {
   const tm = terrainModel;
   if (!tm) return undefined;
-  return (x, y) => sampleElevation(tm, x, y) ?? nearestPointElevation(tm, x, y);
+  const smooth = (x: number, y: number) => sampleElevation(tm, x, y) ?? nearestPointElevation(tm, x, y);
+  // 계단식 표시 중에는 선·채움도 단 높이에 얹는다 — 매끈한 면 높이에 두면 단을 덮어 계단이 안 보인다
+  const levels = terrainLevels;
+  if (terrainStepped && levels) return (x, y) => quantizeToLevel(levels, smooth(x, y));
+  return smooth;
 }
 
 /**
@@ -312,6 +316,9 @@ terrainSteppedInput.addEventListener("change", () => {
     const g = groups.get(b.id);
     if (g) applyOffset(g, b);
   }
+  // 도로·필지·대상지 채움과 검토선도 단 높이로 다시 얹는다
+  rebuildOverlays();
+  updateSetbackChecks();
   if (terrainModel) {
     setStatus(
       terrainStepped
