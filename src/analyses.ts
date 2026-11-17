@@ -84,6 +84,10 @@ export interface AnalysisModule {
   /** 실행 버튼 위에 넣을 본문 HTML (예: 차양 목록) — onMount에서 이벤트를 단다 */
   bodyHtml?: string;
   onMount?(): void;
+  /** 보고서 그림 캡처용 — 결과 표시만 켜고 끈다 */
+  setVisible?(on: boolean): void;
+  /** 보고서에 그림 대신(또는 함께) 넣을 HTML (예: 입면 SVG) */
+  reportHtml?(): string;
   /** .view 열기·배치안 불러오기·DXF 불러오기 뒤 — 프로젝트 데이터로 다시 그릴 때 */
   onProjectLoaded?(): void;
 }

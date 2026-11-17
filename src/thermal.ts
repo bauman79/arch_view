@@ -187,6 +187,9 @@ export function createThermalModule(ctx: AnalysisContext): AnalysisModule {
       overlay = null;
     },
     hasResult: () => result !== null,
+    setVisible(on: boolean) {
+      if (overlay) overlay.visible = on;
+    },
     summaryHtml() {
       const r = result!;
       return (

@@ -323,6 +323,24 @@ export function createSkylineModule(ctx: AnalysisContext): AnalysisModule {
         .join("");
     },
     legends: () => [],
+    reportHtml() {
+      const rs = results!;
+      return (
+        rs
+          .filter((r) => r.side === "south" || r.side === "east")
+          .map((r) => `<div class="rp-svg">${elevationSvg(r, true)}</div>`)
+          .join("") +
+        `<table class="rp-table"><tr><th>방향</th><th>입면 차폐율</th><th>가린 폭 / 대지 폭</th><th>최고·최저·평균</th><th>높이 편차</th></tr>` +
+        rs
+          .map(
+            (r) =>
+              `<tr><td>${SIDE_LABEL[r.side]}</td><td>${pct(r.coverRatio, 1)}</td><td>${r.coveredM.toFixed(0)} / ${r.widthM.toFixed(0)}m</td>` +
+              `<td>${r.maxH.toFixed(0)} · ${r.minH.toFixed(0)} · ${r.avgH.toFixed(0)}m</td><td>${r.stdH.toFixed(1)}m</td></tr>`,
+          )
+          .join("") +
+        `</table>`
+      );
+    },
     board() {
       const rs = results!;
       return {

@@ -209,6 +209,9 @@ export function createUnitSunModule(ctx: AnalysisContext): AnalysisModule {
       overlay = null;
     },
     hasResult: () => result !== null,
+    setVisible(on: boolean) {
+      if (overlay) overlay.visible = on;
+    },
     summaryHtml() {
       const r = result!;
       const under = r.buildings.filter((b) => b.pass / b.points < r.targetRatio - 1e-9);

@@ -398,6 +398,9 @@ export function createShadeWalkModule(ctx: AnalysisContext): AnalysisModule {
       overlay = null;
     },
     hasResult: () => result !== null,
+    setVisible(on: boolean) {
+      if (overlay) overlay.visible = on;
+    },
     summaryHtml() {
       const r = result!;
       const d = (r.ratioAfter - r.ratioBefore) * 100;

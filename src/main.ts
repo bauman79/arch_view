@@ -115,6 +115,7 @@ import {
   analysisBoard,
   analysisLegends,
   analysisSheets,
+  getAnalyses,
   initAnalyses,
   textSprite,
   invalidateAnalyses,
@@ -125,6 +126,7 @@ import {
   type BoardItem,
 } from "./analyses";
 import { renderResultBoard } from "./resultboard";
+import { buildReportHtml, type ReportFigure } from "./report";
 import { makeSurface, type DrapeSurface } from "./drape";
 import { diagnoseDxfText, diagnosisHtml } from "./dxfdiag";
 import { findMaxFloors, planTypeOf, type MaxFloorResult } from "./maxfloors";
@@ -899,6 +901,7 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
       contourPoints: contourPoints.length,
       warnings,
     });
+    lastDxfName = sourceName;
     const unknown = diag.layers.filter((l) => l.category.startsWith("미인식")).length;
     if (unknown > 0) msg += ` · 미인식 레이어 ${unknown}개 (도면 진단표 참고)`;
     setStatus(msg, warnings.length > 0 ? warnings.join("\n\n") : undefined);
@@ -1060,6 +1063,130 @@ document.getElementById("mf-apply")!.addEventListener("click", () => {
   mfPending = null;
   (document.getElementById("mf-apply") as HTMLElement).hidden = true;
   renderFloorsTypes();
+});
+
+// ---------- 보고서 PDF ----------
+let lastDxfName = "";
+
+interface FigureSource {
+  title: string;
+  objs: () => (THREE.Object3D | null | undefined)[];
+  legendPrefix?: string[];
+  entryTitles: string[];
+}
+
+function mainFigureSources(): FigureSource[] {
+  const out: FigureSource[] = [];
+  if (lastNorthSetback)
+    out.push({ title: "법규 검토 — 정북사선·채광사선·인동거리", objs: () => [northSetbackRoot, daylightRoot, spacingRoot], entryTitles: ["정북사선", "채광사선", "인동거리"] });
+  if (lastSunHours) out.push({ title: "일조권 (인접건물)", objs: () => [sunHoursRoot], legendPrefix: ["일조권 —"], entryTitles: ["일조권 (인접건물)"] });
+  if (lastFacility) out.push({ title: "유치원·학교·교회 일조", objs: () => [facilityGroup], legendPrefix: ["유치원·학교·교회"], entryTitles: ["유치원·학교·교회 일조"] });
+  if (lastSunHoursMap) out.push({ title: "일조시간 지도", objs: () => [sunHoursMapGroup], legendPrefix: ["일조시간 지도"], entryTitles: [`일조시간 지도 (${lastSunHoursMap.date})`] });
+  if (lastWind) out.push({ title: "바람길 (간이)", objs: () => [windGroup], legendPrefix: ["바람길 —"], entryTitles: ["바람길 (간이)"] });
+  if (lastLbm) out.push({ title: "바람길 LBM", objs: () => [lbmStreamGroup, lbmHeatmap?.mesh], legendPrefix: ["바람길 LBM"], entryTitles: ["바람길 LBM"] });
+  return out;
+}
+
+async function blobToDataUrl(b: Blob): Promise<string> {
+  return new Promise((res) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result as string);
+    fr.readAsDataURL(b);
+  });
+}
+
+document.getElementById("export-report")!.addEventListener("click", async () => {
+  if (project.buildings.length === 0) {
+    setStatus("먼저 DXF를 불러오세요.");
+    return;
+  }
+  // 팝업 차단을 피하려고 클릭 즉시 창을 연다
+  const win = window.open("", "_blank");
+  if (!win) {
+    setStatus("팝업이 차단되었습니다 — 이 사이트의 팝업을 허용해 주세요.");
+    return;
+  }
+  win.document.write(`<p style="font-family:sans-serif;padding:20px">보고서를 만드는 중…</p>`);
+  setStatus("보고서 그림을 만드는 중…");
+  syncAllSettings();
+  const mains = mainFigureSources();
+  const mods = getAnalyses().filter((m) => m.hasResult());
+  // 결과 표시 상태 보관 → 그림마다 그 분석만 켜고 캡처 → 복원
+  const allObjs = mains.flatMap((f) => f.objs()).filter((o): o is THREE.Object3D => !!o);
+  const vis = allObjs.map((o) => o.visible);
+  const hideAll = () => {
+    for (const o of allObjs) o.visible = false;
+    for (const m of mods) m.setVisible?.(false);
+  };
+  const capture = async (legends: LegendItem[]) =>
+    blobToDataUrl(
+      await viewer.captureJpeg(
+        0.9,
+        (ctx, w, h, sc) => {
+          drawLegendsOnCanvas(ctx, legends, h, sc);
+          drawCompassAndScale(ctx, w, h, sc);
+        },
+        { whiteBackground: true }, // 인쇄용 — 흰 배경
+      ),
+    );
+  const boardAll = [...mainBoardEntries(), ...analysisBoard()];
+  const figures: ReportFigure[] = [];
+  let cover: string | undefined;
+  try {
+    hideAll();
+    cover = await capture([]);
+    const legendsMain = currentLegends();
+    for (const f of mains) {
+      hideAll();
+      for (const o of f.objs()) if (o) o.visible = true;
+      const lg = f.legendPrefix ? legendsMain.filter((l) => f.legendPrefix!.some((p) => l.title.startsWith(p))) : [];
+      const entries = boardAll.filter((e) => f.entryTitles.includes(e.title));
+      const merged = entries.length > 1
+        ? { title: f.title, value: entries.map((e) => `${e.title} ${e.value}`).join(" · "), verdict: entries.some((e) => e.verdict === "bad") ? ("bad" as const) : ("ok" as const), items: entries.flatMap((e) => e.items ?? []) }
+        : entries[0] ?? null;
+      figures.push({ title: f.title, image: await capture(lg), entry: merged });
+    }
+    for (const m of mods) {
+      const entry = m.board();
+      if (m.setVisible) {
+        hideAll();
+        m.setVisible(true);
+        figures.push({ title: m.title, image: await capture(m.legends()), entry, html: m.reportHtml?.() });
+      } else {
+        figures.push({ title: m.title, html: m.reportHtml?.(), entry });
+      }
+    }
+  } finally {
+    allObjs.forEach((o, i) => (o.visible = vis[i]));
+    for (const m of mods) m.setVisible?.(true);
+    if (lbmHeatmap) lbmHeatmap.mesh.visible = lbmHeatmapChk.checked;
+    if (lbmStreamGroup) lbmStreamGroup.visible = lbmStreamChk.checked;
+  }
+  const t = siteUnitTotals(project.buildings);
+  const cov = coverageStats(project.buildings, project.site.siteAreaM2);
+  const now = new Date();
+  const html = buildReportHtml({
+    title: `배치 검토 보고서${lastDxfName ? ` — ${lastDxfName.replace(/\.dxf$/i, "")}` : ""}`,
+    generatedAt: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+    info: [
+      ["기준일", project.analysis.date],
+      ["위치", `위도 ${project.site.latitude.toFixed(4)} · 경도 ${project.site.longitude.toFixed(4)}`],
+      ["계획주동", `${t.buildingCount}동 · ${t.total.toLocaleString()}세대`],
+      ["연면적", `${Math.round(cov.grossM2).toLocaleString()}㎡`],
+      ["대지면적", project.site.siteAreaM2 > 0 ? `${project.site.siteAreaM2.toLocaleString()}㎡` : "미입력"],
+      ["건폐율 · 용적률", cov.bcrPct === null ? "대지면적 미입력" : `${cov.bcrPct.toFixed(1)}% · ${cov.farPct?.toFixed(1)}%`],
+      ["층수 범위", (() => { const fs = project.buildings.filter((b) => b.type === "계획주동").map((b) => b.floors); return fs.length ? `${Math.min(...fs)}~${Math.max(...fs)}층` : "—"; })()],
+    ],
+    summary: boardAll,
+    cover,
+    figures,
+  });
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  // 이미지가 다 그려진 뒤 인쇄 창 — 사용자가 "PDF로 저장"을 고른다
+  win.addEventListener("load", () => setTimeout(() => win.print(), 300));
+  setStatus(`보고서를 만들었습니다 — 그림 ${figures.length + 1}장. 새 창의 인쇄 화면에서 "PDF로 저장"을 고르세요.`);
 });
 
 // ---------- 도면 진단표 ----------

@@ -324,6 +324,9 @@ export function createNoiseModule(ctx: AnalysisContext): AnalysisModule {
       overlay = null;
     },
     hasResult: () => result !== null,
+    setVisible(on: boolean) {
+      if (overlay) overlay.visible = on;
+    },
     summaryHtml() {
       const r = result!;
       const maxDb = Math.max(...r.points.map((p) => p.db));
