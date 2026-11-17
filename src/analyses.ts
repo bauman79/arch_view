@@ -23,6 +23,10 @@ export interface AnalysisContext {
   flyTo(p: THREE.Vector3, dist?: number): void;
   /** 다른 분석 결과 참조용 (예: 열쾌적성이 LBM 결과를 쓸 때) */
   extras: Record<string, unknown>;
+  /** DXF 원점 보정값 — 결과를 DXF로 내보낼 때 원본 좌표 복원용 */
+  sceneOrigin(): { x: number; y: number } | null;
+  /** 파일 저장(바탕화면 저장 창 → 공유/다운로드 폴백) */
+  saveFile(blob: Blob, filename: string, description: string, accept: Record<string, string[]>): Promise<void>;
 }
 
 export type Verdict = "ok" | "warn" | "bad" | "info";
@@ -221,9 +225,38 @@ export function disposeObject(obj: THREE.Object3D | null): void {
     const anyO = o as THREE.Mesh;
     if (anyO.geometry) anyO.geometry.dispose();
     const mat = anyO.material as THREE.Material | THREE.Material[] | undefined;
-    if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
-    else mat?.dispose();
+    const disp = (x: THREE.Material) => {
+      (x as THREE.SpriteMaterial).map?.dispose();
+      x.dispose();
+    };
+    if (Array.isArray(mat)) mat.forEach(disp);
+    else if (mat) disp(mat);
   });
+}
+
+/** 3D 문자 라벨 (캔버스 텍스처 스프라이트) — 높이 h(m) */
+export function textSprite(text: string, color = "#ffffff", h = 6, bg = "rgba(13,21,37,0.75)"): THREE.Sprite {
+  const fs = 48;
+  const c = document.createElement("canvas");
+  const ctx2 = c.getContext("2d")!;
+  ctx2.font = `600 ${fs}px -apple-system, "Apple SD Gothic Neo", sans-serif`;
+  const w = Math.ceil(ctx2.measureText(text).width) + 24;
+  c.width = w;
+  c.height = fs + 20;
+  ctx2.font = `600 ${fs}px -apple-system, "Apple SD Gothic Neo", sans-serif`;
+  ctx2.fillStyle = bg;
+  ctx2.beginPath();
+  ctx2.roundRect(0, 0, w, c.height, 12);
+  ctx2.fill();
+  ctx2.fillStyle = color;
+  ctx2.textBaseline = "middle";
+  ctx2.fillText(text, 12, c.height / 2 + 2);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  sp.scale.set((h * w) / c.height, h, 1);
+  sp.renderOrder = 10;
+  return sp;
 }
 
 export function pct(n: number, d: number): string {

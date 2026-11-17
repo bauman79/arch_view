@@ -425,3 +425,67 @@ export function hasExportContent(project: Project): boolean {
 
 /** 오버레이 타입 재수출 — main.ts에서 import 편의용 */
 export type { OverlayLine };
+
+// ============================================================
+// 분석 결과 선(일영도·등시간선 등)을 레이어별 DXF로
+// ============================================================
+
+export interface DxfLineLayer {
+  name: string;
+  /** ACI 색 번호 */
+  color: number;
+  segments: [Point2, Point2][];
+  /** 문자 (선택) — 위치·높이(m)·내용 */
+  texts?: { at: Point2; height: number; text: string }[];
+}
+
+/**
+ * 레이어별 선분 묶음 → R12 DXF (mm, 원본 도면 좌표 복원). 원본 배치도에 그대로
+ * 겹쳐 넣을 수 있도록 buildDxfText와 같은 단위·원점 규약을 쓴다.
+ */
+export function buildLinesDxf(layers: DxfLineLayer[], origin: Point2 | null): string {
+  const ox = origin?.x ?? 0;
+  const oy = origin?.y ?? 0;
+  const toMm = (p: Point2): Point2 => ({ x: (p.x + ox) * 1000, y: (p.y + oy) * 1000 });
+  const w = mkWriter();
+  w.pair(0, "SECTION");
+  w.pair(2, "HEADER");
+  w.pair(9, "$ACADVER");
+  w.pair(1, "AC1009");
+  w.pair(9, "$INSUNITS");
+  w.pair(70, 4);
+  w.pair(0, "ENDSEC");
+  w.pair(0, "SECTION");
+  w.pair(2, "TABLES");
+  w.pair(0, "TABLE");
+  w.pair(2, "LAYER");
+  w.pair(70, layers.length);
+  for (const l of layers) {
+    w.pair(0, "LAYER");
+    w.pair(2, l.name);
+    w.pair(70, 0);
+    w.pair(62, l.color);
+    w.pair(6, "CONTINUOUS");
+  }
+  w.pair(0, "ENDTAB");
+  w.pair(0, "ENDSEC");
+  w.pair(0, "SECTION");
+  w.pair(2, "ENTITIES");
+  for (const l of layers) {
+    for (const [a, b] of l.segments) writeLine(w, l.name, l.color, toMm(a), toMm(b));
+    for (const t of l.texts ?? []) {
+      const p = toMm(t.at);
+      w.pair(0, "TEXT");
+      w.pair(8, l.name);
+      w.pair(62, l.color);
+      w.pair(10, FMT(p.x));
+      w.pair(20, FMT(p.y));
+      w.pair(30, "0.0");
+      w.pair(40, FMT(t.height * 1000));
+      w.pair(1, t.text);
+    }
+  }
+  w.pair(0, "ENDSEC");
+  w.pair(0, "EOF");
+  return w.lines.join("\r\n") + "\r\n";
+}

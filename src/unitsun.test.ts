@@ -12,6 +12,8 @@ function ctxOf(p: ReturnType<typeof mkProject>): AnalysisContext {
     changed: () => {},
     flyTo: () => {},
     extras: {},
+    sceneOrigin: () => null,
+    saveFile: async () => {},
   };
 }
 

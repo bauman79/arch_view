@@ -123,6 +123,7 @@ import {
 } from "./analyses";
 import { renderResultBoard } from "./resultboard";
 import { createUnitSunModule } from "./unitsun";
+import { createShadowPlanModule } from "./shadowplan";
 import {
   drawLegendsOnCanvas,
   gradientFromStops,
@@ -2788,9 +2789,24 @@ const analysisCtx: AnalysisContext = {
   extras: {
     lastLbm: () => lastLbm,
   },
+  sceneOrigin: () => sceneOrigin,
+  async saveFile(blob, filename, description, accept) {
+    const picked = await saveToDesktop(blob, filename, description, accept);
+    if (picked === "cancelled") {
+      setStatus("저장 취소됨");
+      return;
+    }
+    if (picked !== "unsupported") {
+      setStatus(`저장 — ${picked}`);
+      return;
+    }
+    const out = await shareOrDownload(new File([blob], filename, { type: blob.type }), filename);
+    setStatus(out === "cancelled" ? "공유 취소됨" : `${out === "shared" ? "공유함" : "저장"} — ${filename}`);
+  },
 };
 initAnalyses(analysisCtx);
 registerAnalysis(createUnitSunModule(analysisCtx));
+registerAnalysis(createShadowPlanModule(analysisCtx));
 
 // ---------- 시점 저장 · JPG 내보내기 ----------
 
