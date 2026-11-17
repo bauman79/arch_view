@@ -293,6 +293,7 @@ export class Viewer {
   captureJpeg(
     quality = 0.92,
     overlay?: (ctx: CanvasRenderingContext2D, w: number, h: number, scale: number) => void,
+    opts: { whiteBackground?: boolean } = {},
   ): Promise<Blob> {
     const r = this.renderer;
     const prev = r.getPixelRatio();
@@ -302,6 +303,26 @@ export class Viewer {
     r.setPixelRatio(ratio);
     r.setSize(w, h);
     this.controls.update();
+    // 삽도용 — 저장할 때만 그림자 맵을 GPU 한도(최대 8192)까지 키워 경계를 선명하게
+    const sh = this.sunLight.shadow;
+    const prevMap = sh.mapSize.x;
+    const prevBias = sh.normalBias;
+    const hi = Math.min(8192, r.capabilities.maxTextureSize);
+    if (hi > prevMap) {
+      sh.mapSize.set(hi, hi);
+      sh.map?.dispose();
+      sh.map = null;
+      sh.normalBias = prevBias * (prevMap / hi) * 1.5;
+    }
+    // 흰 배경 — 배경·안개·격자·바닥판을 잠시 끈다
+    const prevBg = this.scene.background;
+    const prevFog = this.scene.fog;
+    const helperVis = this.groundHelpers.map((g) => g.visible);
+    if (opts.whiteBackground) {
+      this.scene.background = new THREE.Color(0xffffff);
+      this.scene.fog = null;
+      for (const g of this.groundHelpers) g.visible = false;
+    }
     r.render(this.scene, this.camera);
     // 렌더 직후(같은 작업 안) 2D 캔버스로 옮겨 범례 등을 덧그린다
     const out = document.createElement("canvas");
@@ -319,6 +340,17 @@ export class Viewer {
     });
     r.setPixelRatio(prev);
     r.setSize(w, h);
+    if (hi > prevMap) {
+      sh.mapSize.set(prevMap, prevMap);
+      sh.map?.dispose();
+      sh.map = null;
+      sh.normalBias = prevBias;
+    }
+    if (opts.whiteBackground) {
+      this.scene.background = prevBg;
+      this.scene.fog = prevFog;
+      this.groundHelpers.forEach((g, i) => (g.visible = helperVis[i]));
+    }
     return blob;
   }
 

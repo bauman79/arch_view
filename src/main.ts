@@ -2947,7 +2947,7 @@ document.getElementById("save-cam-view")!.addEventListener("click", () => {
   setStatus(`지금 시점을 "${name}"(으)로 저장했습니다 — 버튼을 누르면 이 시점으로 돌아옵니다 (더블클릭으로 이름 변경, .view 저장 시 함께 저장)`);
 });
 
-document.getElementById("export-jpg")!.addEventListener("click", async () => {
+async function exportJpg(whiteBackground: boolean): Promise<void> {
   const stamp = new Date();
   const pad = (x: number) => String(x).padStart(2, "0");
   const filename =
@@ -2955,8 +2955,10 @@ document.getElementById("export-jpg")!.addEventListener("click", async () => {
     `${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}.jpg`;
   try {
     const legends = currentLegends();
-    const blob = await viewer.captureJpeg(0.92, (ctx, _w, h, scale) =>
-      drawLegendsOnCanvas(ctx, legends, h, scale),
+    const blob = await viewer.captureJpeg(
+      0.92,
+      (ctx, _w, h, scale) => drawLegendsOnCanvas(ctx, legends, h, scale),
+      { whiteBackground },
     );
     const picked = await saveToDesktop(blob, filename, "JPG 이미지", {
       "image/jpeg": [".jpg", ".jpeg"],
@@ -2980,7 +2982,9 @@ document.getElementById("export-jpg")!.addEventListener("click", async () => {
     setStatus(`이미지 저장 실패: ${(err as Error).message}`);
     console.error(err);
   }
-});
+}
+document.getElementById("export-jpg")!.addEventListener("click", () => void exportJpg(false));
+document.getElementById("export-jpg-white")!.addEventListener("click", () => void exportJpg(true));
 
 renderSavedViews();
 
@@ -3004,6 +3008,7 @@ if (import.meta.env.DEV) {
     project,
     viewer,
     groups,
+    rebuildAll: () => rebuildAll(),
     runNorthSetbackCheck,
     getLastNorthSetback: () => lastNorthSetback,
     buildingHeight,
