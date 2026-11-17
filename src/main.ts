@@ -1012,12 +1012,18 @@ function renderFloorsTypes(): void {
 }
 
 let tpPending: TentResult | null = null;
+let tpGfa: { retailM2: number; amenityPerUnit: number } | null = null;
 let tpUpf: Map<string, number> | null = null;
 
 document.getElementById("floors-tool-btn")!.addEventListener("click", () => {
   renderFloorsTypes();
+  // 근생·부대는 기본 설정 값과 같은 것을 쓴다 (비어 있으면 개략 기본값 제안)
   const retail = document.getElementById("tp-retail") as HTMLInputElement;
-  if (!retail.value) retail.value = String(defaultTentOptions(project.site.siteAreaM2).retailM2);
+  const amen = document.getElementById("tp-amenity") as HTMLInputElement;
+  const ex = project.analysis.gfaExtra;
+  const dflt = defaultTentOptions(project.site.siteAreaM2);
+  retail.value = String(ex && ex.retailM2 > 0 ? ex.retailM2 : dflt.retailM2);
+  amen.value = String(ex && ex.amenityPerUnit > 0 ? ex.amenityPerUnit : dflt.amenityPerUnit);
   tpPending = null;
   (document.getElementById("tp-result") as HTMLElement).innerHTML = "";
   (document.getElementById("tp-apply") as HTMLElement).hidden = true;
@@ -1093,7 +1099,8 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
     amenityPerUnit: Math.max(0, num("tp-amenity", 3)),
     maxFloors: Math.max(1, Math.round(num("tp-max", 35))),
     minFloors: Math.max(1, Math.round(num("tp-min", 7))),
-    edgeFactor: num("tp-edge", 1.5),
+    edgeFactor: num("tp-edge", 1),
+    assumedAdjFloors: Math.max(0, num("tp-assume", 10)),
     edgeRadius: num("tp-radius", 100),
     shape: num("tp-shape", 1),
     areaPerUnit: num("tp-apu", 110),
@@ -1159,10 +1166,36 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
       res = { ...res, ...m, peak: Math.max(...res.rows.map((r) => r.floors)) };
     }
     tpPending = res;
+    tpGfa = { retailM2: o.retailM2, amenityPerUnit: o.amenityPerUnit };
     tpUpf = new Map(plans.map((b) => [b.id, unitsPerFloorOf(b, o.areaPerUnit)]));
+    // 목표 미달이면 원인 설명 — 법규 한도까지 모두 올렸을 때의 최대치와 걸리는 기준
+    let why = "";
+    if (!res.meets) {
+      const bound = tentMetrics(project, new Map([...legalMap].map(([id, f]) => [id, Math.min(f, o.maxFloors)])), o);
+      const cnt = new Map<string, number>();
+      for (const r of legal) {
+        const k = r.limit === "한도" ? `최고층 한도(${o.maxFloors}층)` : r.limit;
+        cnt.set(k, (cnt.get(k) ?? 0) + 1);
+      }
+      const free = planTent(project, new Map(plans.map((b) => [b.id, o.maxFloors])), o);
+      const unit = kind === "far" ? "%" : "세대";
+      const bv = kind === "far" ? (bound.farPct ?? 0).toFixed(1) : bound.units.toLocaleString();
+      why =
+        `<div class="tp-why"><b>왜 못 채우나요?</b> 이 배치(동 위치·바닥면적)로는 모든 동을 법규 최대 층수까지 올려도 ` +
+        `<b>${kind === "far" ? "용적률" : "세대수"} ${bv}${unit}</b>가 한계입니다 (목표 ${o.target.value.toLocaleString()}${unit}). ` +
+        `동마다 막는 기준: ${[...cnt].map(([k, v]) => `${k} ${v}동`).join(" · ")}.<br>` +
+        (free.meets
+          ? `법규를 빼고 텐트형만 적용하면 최고 ${free.peak}층으로 목표를 채울 수 있습니다(참고). `
+          : `법규를 빼도 최고 ${o.maxFloors}층 한도로는 부족합니다 — 최고층 한도를 올리거나 동을 추가·확대해야 합니다. `) +
+        `→ 인동거리가 막으면 동 간격을, 정북사선이 막으면 북측 이격을 넓히거나 동 바닥면적(층당 세대)을 키워야 합니다.</div>`;
+    }
     const rows = [...res.rows].sort((a, b) => b.depth - a.depth);
     const targetText = kind === "far" ? `용적률 ${o.target.value}%` : `${o.target.value.toLocaleString()}세대`;
     out.innerHTML =
+      (res.relaxedLift !== null
+        ? `<div class="tp-why">최고 ${o.maxFloors}층 텐트로는 목표에 못 미쳐 <b>텐트를 완화</b>했습니다 — 낮은 동을 ` +
+          `${res.meets ? `${res.relaxedLift}층까지` : "법규 한도까지"} 끌어올렸습니다(가운데가 높은 순서는 유지).</div>`
+        : "") +
       `<p class="${res.meets ? "" : "down"}" style="font-size:13px"><b>${res.meets ? "목표 충족" : "목표 미달"}</b> — ${targetText} 기준 · 최고 ${res.peak}층 · ` +
       `세대 ${res.units.toLocaleString()} · 용적률 ${res.farPct === null ? "—" : res.farPct.toFixed(1) + "%"} ` +
       `(주거 ${Math.round(res.residentialM2).toLocaleString()} + 근생 ${o.retailM2.toLocaleString()} + 부대 ${Math.round(res.amenityM2).toLocaleString()}㎡)` +
@@ -1177,6 +1210,7 @@ document.getElementById("tp-run")!.addEventListener("click", async () => {
         )
         .join("") +
       `</table><p class="hint">깊이 = 대지 경계에서 얼마나 안쪽인가(100% = 가장 가운데). 빨간 막대는 법규 최대 층수로 잘린 동입니다. 연면적은 개략(바닥면적 × 주거층수)입니다.</p>`;
+    out.insertAdjacentHTML("afterbegin", why);
     (document.getElementById("tp-apply") as HTMLElement).hidden = false;
   } finally {
     runBtn.disabled = false;
@@ -1198,6 +1232,12 @@ document.getElementById("tp-apply")!.addEventListener("click", () => {
       estimated++;
     }
     changed.push(b);
+  }
+  // 배분에 쓴 근생·부대 면적을 기본 설정에도 반영 — 화면 아래 용적률과 같은 값이 되게
+  if (tpGfa) {
+    project.analysis.gfaExtra = { ...tpGfa };
+    gfaRetailInput.value = String(tpGfa.retailM2);
+    gfaAmenityInput.value = String(tpGfa.amenityPerUnit);
   }
   afterFloorsChanged(changed);
   setStatus(
@@ -1325,7 +1365,7 @@ document.getElementById("export-report")!.addEventListener("click", async () => 
     if (lbmStreamGroup) lbmStreamGroup.visible = lbmStreamChk.checked;
   }
   const t = siteUnitTotals(project.buildings);
-  const cov = coverageStats(project.buildings, project.site.siteAreaM2);
+  const cov = coverageStats(project.buildings, project.site.siteAreaM2, project.analysis.gfaExtra);
   const now = new Date();
   const html = buildReportHtml({
     title: `배치 검토 보고서${lastDxfName ? ` — ${lastDxfName.replace(/\.dxf$/i, "")}` : ""}`,
@@ -2247,7 +2287,24 @@ const siteAreaInput = document.getElementById("site-area") as HTMLInputElement;
 /** 사이드 패널 하단 세대수 합계 + 건폐율·용적률 갱신 */
 function updateSiteTotals(): void {
   project.site.siteAreaM2 = Math.max(0, parseFloat(siteAreaInput.value) || 0);
-  renderSiteTotals(project.buildings, project.site.siteAreaM2);
+  syncGfaExtra();
+  renderSiteTotals(project.buildings, project.site.siteAreaM2, project.analysis.gfaExtra);
+}
+
+const gfaRetailInput = document.getElementById("gfa-retail") as HTMLInputElement;
+const gfaAmenityInput = document.getElementById("gfa-amenity") as HTMLInputElement;
+/** 근생·부대 입력값 → project (용적률 표시·엑셀·보고서·자동 배분 공용) */
+function syncGfaExtra(): void {
+  project.analysis.gfaExtra = {
+    retailM2: Math.max(0, parseFloat(gfaRetailInput.value) || 0),
+    amenityPerUnit: Math.max(0, parseFloat(gfaAmenityInput.value) || 0),
+  };
+}
+for (const el of [gfaRetailInput, gfaAmenityInput]) {
+  el.addEventListener("change", () => {
+    updateSiteTotals();
+    commitHistory();
+  });
 }
 
 siteAreaInput.addEventListener("change", () => {
@@ -2401,6 +2458,8 @@ function applyProjectToInputs(): void {
   dateInput.value = project.analysis.date;
   gridInput.value = String(project.analysis.gridSize);
   siteAreaInput.value = String(project.site.siteAreaM2);
+  gfaRetailInput.value = String(project.analysis.gfaExtra?.retailM2 ?? 0);
+  gfaAmenityInput.value = String(project.analysis.gfaExtra?.amenityPerUnit ?? 0);
   fillSetbackInputs(project.analysis.setbackRules);
   sunHoursRuleSelect.value = project.analysis.sunHours.rule;
   sunHoursStepInput.value = String(project.analysis.sunHours.timeStep);
@@ -3069,7 +3128,7 @@ const compareModal = document.getElementById("compare-modal") as HTMLElement;
 function currentSchemeMetrics(): SchemeMetrics {
   syncAllSettings();
   const t = siteUnitTotals(project.buildings);
-  const cov = coverageStats(project.buildings, project.site.siteAreaM2);
+  const cov = coverageStats(project.buildings, project.site.siteAreaM2, project.analysis.gfaExtra);
   const tally = <T extends { checks: { pass: boolean }[] }>(
     r: T | null,
   ): CheckTally | null =>

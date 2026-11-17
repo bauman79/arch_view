@@ -133,7 +133,7 @@ export function buildOverviewRows(project: Project): Cell[][] {
   }
 
   // 합계 (계획주동 기준)
-  const stats = coverageStats(buildings, siteArea);
+  const stats = coverageStats(buildings, siteArea, project.analysis.gfaExtra);
   const totals = siteUnitTotals(buildings);
   rows.push([
     "합계 (계획주동)",

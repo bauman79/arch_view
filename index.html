@@ -1161,6 +1161,7 @@
       .tent-grid input[type=number] { width: 100px; }
       .tent-bar { display: inline-block; height: 8px; background: #e0a030; border-radius: 2px; vertical-align: middle; }
       .tent-bar.cap { background: #e5484d; }
+      .tp-why { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; padding: 8px 10px; font-size: 12px; margin: 6px 0; color: #7c2d12; }
 
       /* 도면 진단표 */
       .diag-checks { list-style: none; padding: 0; margin: 6px 0; font-size: 13px; }
@@ -2060,6 +2061,14 @@
                 <label for="site-area">대지면적(㎡)</label>
                 <input type="number" id="site-area" value="0" min="0" step="100" />
               </div>
+              <div class="row">
+                <label for="gfa-retail" title="용적률 산정 연면적에 더합니다 (개략)">근생 연면적(㎡)</label>
+                <input type="number" id="gfa-retail" value="0" min="0" step="100" />
+              </div>
+              <div class="row">
+                <label for="gfa-amenity" title="주민공동시설 등 — 세대수 × 이 값을 연면적에 더합니다 (개략)">부대복리(㎡/세대)</label>
+                <input type="number" id="gfa-amenity" value="0" min="0" step="0.5" />
+              </div>
               <div id="bcr-far" class="hint"></div>
             </details>
 
@@ -2437,7 +2446,8 @@
           <label>근생 연면적(㎡)</label><input type="number" id="tp-retail" min="0" step="100" />
           <label>부대복리(㎡/세대)</label><input type="number" id="tp-amenity" value="3" min="0" step="0.5" />
           <label>최고·최저 층</label><span><input type="number" id="tp-max" value="35" min="1" max="99" style="width:60px" /> ~ <input type="number" id="tp-min" value="7" min="1" max="99" style="width:60px" /></span>
-          <label>가장자리 = 주변 층수 ×</label><span><input type="number" id="tp-edge" value="1.5" min="0.5" max="5" step="0.1" style="width:60px" /> (반경 <input type="number" id="tp-radius" value="100" min="20" max="500" step="10" style="width:60px" />m)</span>
+          <label>주변 건물 층수 가정</label><span>최소 <input type="number" id="tp-assume" value="10" min="0" max="60" step="1" style="width:60px" />층 <span class="hint">인접건물이 없거나 더 낮으면 이 층수로 봄</span></span>
+          <label>가장자리 = 주변 층수 ×</label><span><input type="number" id="tp-edge" value="1" min="0.5" max="5" step="0.1" style="width:60px" /> (반경 <input type="number" id="tp-radius" value="100" min="20" max="500" step="10" style="width:60px" />m)</span>
           <label>텐트 곡률</label><span><select id="tp-shape"><option value="0.6">완만(넓게 높음)</option><option value="1" selected>보통</option><option value="1.6">뾰족(가운데만)</option></select></span>
           <label>세대당 바닥면적(㎡)</label><span><input type="number" id="tp-apu" value="110" min="30" max="300" step="5" style="width:70px" /> <span class="hint">평형 구성이 없는 동만</span></span>
         </div>

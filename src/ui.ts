@@ -842,9 +842,10 @@ export function refreshUnitInfo(b: Building): void {
 export function renderSiteTotals(
   buildings: Building[],
   siteAreaM2: number,
+  extra?: { retailM2: number; amenityPerUnit: number },
 ): void {
   const t = siteUnitTotals(buildings);
-  const s = coverageStats(buildings, siteAreaM2);
+  const s = coverageStats(buildings, siteAreaM2, extra);
   const totalsEl = document.getElementById("site-totals");
   if (totalsEl) {
     if (t.buildingCount === 0) {
@@ -864,7 +865,9 @@ export function renderSiteTotals(
       s.bcrPct === null
         ? `건축면적 ${s.coverageM2.toFixed(0)}㎡ · 연면적 ${s.grossM2.toFixed(0)}㎡ — 대지면적을 입력하면 건폐율·용적률 표시`
         : `건폐율 ${s.bcrPct.toFixed(1)}% · 용적률 ${s.farPct!.toFixed(1)}%` +
-          ` (건축면적 ${s.coverageM2.toFixed(0)}㎡ · 연면적 ${s.grossM2.toFixed(0)}㎡)`;
+          ` (건축면적 ${s.coverageM2.toFixed(0)}㎡ · 연면적 ${s.grossM2.toFixed(0)}㎡` +
+          (s.extraM2 > 0 ? ` = 주거 ${s.residentialM2.toFixed(0)} + 근생·부대 ${s.extraM2.toFixed(0)}㎡` : "") +
+          `)`;
   }
 }
 

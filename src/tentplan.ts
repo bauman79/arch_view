@@ -23,8 +23,10 @@ export interface TentOptions {
   amenityPerUnit: number;
   maxFloors: number;
   minFloors: number;
-  /** 가장자리 층수 = 주변 건물 최고 층수 × 이 배수 (주변이 없으면 최저층) */
+  /** 가장자리 층수 = 주변 건물 층수 × 이 배수 */
   edgeFactor: number;
+  /** 주변 건물 층수 최소 가정 — 인접건물이 없거나 이보다 낮으면 이 층수로 본다 */
+  assumedAdjFloors: number;
   /** 주변 건물을 볼 반경 (m) */
   edgeRadius: number;
   /** 텐트 곡률 γ — 1이면 직선, 크면 가운데만 뾰족 */
@@ -40,7 +42,8 @@ export function defaultTentOptions(siteAreaM2: number): TentOptions {
     amenityPerUnit: 3,
     maxFloors: 35,
     minFloors: 7,
-    edgeFactor: 1.5,
+    edgeFactor: 1,
+    assumedAdjFloors: 10,
     edgeRadius: 100,
     shape: 1,
     areaPerUnit: 110,
@@ -72,6 +75,8 @@ export interface TentResult {
   meets: boolean;
   /** 목표 대비 (용적률 %p 또는 세대) — 음수면 부족 */
   gap: number;
+  /** 최고층까지 올려도 모자라 낮은 동을 바닥층(lift)까지 끌어올렸는가 — 텐트 완화 */
+  relaxedLift: number | null;
 }
 
 /** 동별 층당 세대 (평형 구성이 없으면 바닥면적으로 추정) */
@@ -123,7 +128,7 @@ export function depthsOf(project: Project, plans: Building[]): Map<string, numbe
   );
 }
 
-/** 가장자리 층수 — 반경 안 주변 건물 최고 층수 × 배수 */
+/** 가장자리 층수 — max(반경 안 주변 건물 최고 층수, 가정 층수) × 배수 */
 export function edgeFloorsOf(project: Project, b: Building, o: TentOptions): number {
   const c = footprintCentroid(worldFootprint(b));
   let maxAdj = 0;
@@ -132,7 +137,8 @@ export function edgeFloorsOf(project: Project, b: Building, o: TentOptions): num
     const ac = footprintCentroid(worldFootprint(a));
     if (Math.hypot(ac.x - c.x, ac.y - c.y) <= o.edgeRadius) maxAdj = Math.max(maxAdj, a.floors);
   }
-  const e = maxAdj > 0 ? Math.round(maxAdj * o.edgeFactor) : o.minFloors;
+  const adj = Math.max(maxAdj, o.assumedAdjFloors ?? 0);
+  const e = adj > 0 ? Math.round(adj * o.edgeFactor) : o.minFloors;
   return Math.min(o.maxFloors, Math.max(o.minFloors, e));
 }
 
@@ -143,18 +149,19 @@ export function planTent(project: Project, legalMax: Map<string, number>, o: Ten
   const upf = new Map(plans.map((b) => [b.id, unitsPerFloorOf(b, o.areaPerUnit)]));
   const site = project.site.siteAreaM2;
 
-  const floorsAt = (peak: number) =>
+  /** lift: 텐트 완화 — 모든 동을 최소 이 층까지 (법규 한도 안에서) 끌어올림 */
+  const floorsAt = (peak: number, lift = 0) =>
     plans.map((b) => {
       const e = Math.min(edges.get(b.id)!, peak);
       const w = depth.get(b.id) ?? 0;
       const ideal = Math.round(e + Math.max(0, peak - e) * Math.pow(w, o.shape));
       const minF = Math.max(o.minFloors, b.pilotiFloors + 1);
       const lm = legalMax.get(b.id) ?? o.maxFloors;
-      const f = Math.max(Math.min(minF, lm), Math.min(ideal, lm, o.maxFloors));
+      const f = Math.max(Math.min(minF, lm), Math.min(Math.max(ideal, Math.round(lift)), lm, o.maxFloors));
       return { b, ideal, f, lm };
     });
-  const evalAt = (peak: number) => {
-    const fs = floorsAt(peak);
+  const evalAt = (peak: number, lift = 0) => {
+    const fs = floorsAt(peak, lift);
     let units = 0;
     let res = 0;
     for (const { b, f } of fs) {
@@ -172,6 +179,7 @@ export function planTent(project: Project, legalMax: Map<string, number>, o: Ten
   // 목표를 채우는 가장 낮은 peak (0.25층 단위) — 지표는 peak에 대해 단조 증가
   let lo = o.minFloors, hi = o.maxFloors;
   let best = evalAt(hi);
+  let relaxedLift: number | null = null;
   if (best.metric >= o.target.value) {
     while (hi - lo > 0.25) {
       const mid = (lo + hi) / 2;
@@ -181,6 +189,25 @@ export function planTent(project: Project, legalMax: Map<string, number>, o: Ten
         best = r;
       } else lo = mid;
     }
+  } else {
+    // 최고층까지 세워도 모자라면 텐트를 완화 — 낮은 동부터 법규 한도까지 끌어올린다
+    // (가운데가 가장 높은 순서는 유지, 목표를 채우는 가장 낮은 바닥층 lift를 찾는다)
+    let a = o.minFloors, z = o.maxFloors;
+    const top = evalAt(o.maxFloors, z);
+    best = top;
+    relaxedLift = z;
+    if (top.metric >= o.target.value) {
+      while (z - a > 0.5) {
+        const mid = (a + z) / 2;
+        const r = evalAt(o.maxFloors, mid);
+        if (r.metric >= o.target.value) {
+          z = mid;
+          best = r;
+          relaxedLift = mid;
+        } else a = mid;
+      }
+    }
+    relaxedLift = Math.round(relaxedLift);
   }
   const peak = Math.max(...best.fs.map((x) => x.f));
   return {
@@ -202,6 +229,7 @@ export function planTent(project: Project, legalMax: Map<string, number>, o: Ten
     amenityM2: best.amenity,
     meets: best.metric >= o.target.value,
     gap: best.metric - o.target.value,
+    relaxedLift,
   };
 }
 

@@ -213,6 +213,16 @@ export interface AnalysisSettings {
   sunHours: SunHoursSettings;
   /** 없으면(옛 .view) 기본값 */
   facility?: FacilitySunSettings;
+  /** 주거 외 지상 연면적 — 용적률에 더한다 (없으면 0) */
+  gfaExtra?: GfaExtra;
+}
+
+/** 근린생활·부대복리시설 연면적 (개략) */
+export interface GfaExtra {
+  /** 근린생활시설 연면적 (㎡) */
+  retailM2: number;
+  /** 부대복리시설 세대당 면적 (㎡/세대) */
+  amenityPerUnit: number;
 }
 
 /** 사용자가 저장한 카메라 시점 — three 좌표(x=동, y=높이, z=-북) */

@@ -153,8 +153,12 @@ export function grossFloorAreaM2(b: Building): number {
 export interface CoverageStats {
   /** Σ 계획주동 footprint 면적 (㎡) */
   coverageM2: number;
-  /** Σ 계획주동 연면적 (㎡) */
+  /** 용적률 산정 연면적 (㎡) = 주거 + 근생·부대 */
   grossM2: number;
+  /** 주거 연면적 (㎡) = Σ 바닥면적 × 주거층수 */
+  residentialM2: number;
+  /** 근생 + 부대복리 (㎡) */
+  extraM2: number;
   /** 건폐율 (%) — 대지면적 미입력이면 null */
   bcrPct: number | null;
   /** 용적률 (%) — 대지면적 미입력이면 null */
@@ -165,18 +169,25 @@ export interface CoverageStats {
 export function coverageStats(
   buildings: Building[],
   siteAreaM2: number,
+  extra?: { retailM2: number; amenityPerUnit: number },
 ): CoverageStats {
   let coverageM2 = 0;
-  let grossM2 = 0;
+  let residentialM2 = 0;
   for (const b of buildings) {
     if (b.type !== "계획주동") continue;
     coverageM2 += footprintAreaM2(b);
-    grossM2 += grossFloorAreaM2(b);
+    residentialM2 += grossFloorAreaM2(b);
   }
+  const extraM2 = extra
+    ? Math.max(0, extra.retailM2) + Math.max(0, extra.amenityPerUnit) * siteUnitTotals(buildings).total
+    : 0;
+  const grossM2 = residentialM2 + extraM2;
   const ok = siteAreaM2 > 0;
   return {
     coverageM2,
     grossM2,
+    residentialM2,
+    extraM2,
     bcrPct: ok ? (coverageM2 / siteAreaM2) * 100 : null,
     farPct: ok ? (grossM2 / siteAreaM2) * 100 : null,
   };
