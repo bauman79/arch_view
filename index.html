@@ -1150,6 +1150,30 @@
         color: #f0b45a;
       }
 
+      /* 통합 결과판 */
+      #result-board-body { display: flex; flex-direction: column; gap: 6px; }
+      .rb-entry { border: 1px solid #d5dce6; border-left: 4px solid #94a3b8; border-radius: 6px; padding: 6px 8px; background: #fff; }
+      .rb-entry.rb-ok { border-left-color: #22c55e; }
+      .rb-entry.rb-bad { border-left-color: #e5484d; }
+      .rb-entry.rb-warn { border-left-color: #f5a524; }
+      .rb-entry.rb-info { border-left-color: #4c8bf5; }
+      .rb-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+      .rb-title { font-weight: 600; font-size: 13px; }
+      .rb-chip { font-size: 11px; padding: 1px 6px; border-radius: 9px; background: #eef2f7; color: #475569; white-space: nowrap; }
+      .rb-ok .rb-chip { background: #dcfce7; color: #166534; }
+      .rb-bad .rb-chip { background: #fee2e2; color: #991b1b; }
+      .rb-warn .rb-chip { background: #fef3c7; color: #92400e; }
+      .rb-value { font-size: 12px; color: #334155; margin-top: 2px; }
+      .rb-items summary { font-size: 11px; color: #64748b; cursor: pointer; margin-top: 3px; }
+      .rb-items > div { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; max-height: 220px; overflow-y: auto; }
+      .rb-item { text-align: left; font-size: 11px; border: none; background: #f8fafc; border-radius: 4px; padding: 3px 6px; cursor: pointer; color: #334155; }
+      .rb-item:hover:not(:disabled) { background: #e2e8f0; }
+      .rb-item.rb-bad { color: #b91c1c; }
+      .rb-item.rb-warn { color: #b45309; }
+      .rb-item:disabled { cursor: default; }
+      .an-summary { margin-top: 6px; }
+      .an-big { font-size: 20px; font-weight: 700; color: #1e293b; }
+
       /* 좌하단 분석 범례(키맵) */
       #view-legend {
         position: absolute;
@@ -2085,6 +2109,8 @@
               </details>
             </details>
 
+            <div data-analysis-slot="sun"></div>
+
             <details class="lp-acc" id="sunhoursmap-section">
               <summary>일조시간 지도</summary>
               <div class="row">
@@ -2165,6 +2191,8 @@
               </details>
             </details>
 
+            <div data-analysis-slot="env"></div>
+
             <details class="lp-acc" id="terrain-section">
               <summary>지형</summary>
               <div class="row">
@@ -2238,6 +2266,10 @@
             <div id="unit-summary-body">
               <p class="hint">계획주동을 배치하면 전체·타입별 세대수가 표시됩니다.</p>
             </div>
+          </section>
+          <section id="result-board" hidden>
+            <div class="detail-sec-title">검토·분석 결과판</div>
+            <div id="result-board-body"></div>
           </section>
           <section id="lbm-result" hidden>
             <div class="detail-sec-title">LBM 바람 분석 (M10)</div>

@@ -111,6 +111,19 @@ import type {
 } from "./lbm.worker";
 import { createLbmHeatmap, RATIO_STOPS, type LbmHeatmap } from "./lbmvis";
 import {
+  analysisBoard,
+  analysisLegends,
+  analysisSheets,
+  initAnalyses,
+  invalidateAnalyses,
+  registerAnalysis,
+  type AnalysisContext,
+  type BoardEntry,
+  type BoardItem,
+} from "./analyses";
+import { renderResultBoard } from "./resultboard";
+import { createUnitSunModule } from "./unitsun";
+import {
   drawLegendsOnCanvas,
   gradientFromStops,
   renderLegendPanel,
@@ -968,6 +981,7 @@ function invalidateAnalysis(): void {
   // 지점 일조 측정 — 배치가 바뀌면 차폐가 달라지므로 다시 만들고 떠 있던 값은 닫는다
   disposeProbeMeshes();
   hideSunProbe();
+  invalidateAnalyses(note);
   updateLegends();
 }
 
@@ -1090,6 +1104,7 @@ function updateSetbackChecks(): void {
   if (lastSpacing) spacingRoot.add(createSpacingOverlay(lastSpacing, elev));
   renderSetbackSummary(lastNorthSetback, lastDaylight, lastSpacing);
   refreshStatusDots(computeStatusMap());
+  updateLegends();
 }
 
 function setToggle(btn: HTMLElement, on: boolean): void {
@@ -1706,6 +1721,7 @@ document.getElementById("export-xlsx")!.addEventListener("click", async () => {
       lastSunHoursMap,
       lastLbm,
       lastFacility,
+      analysisSheets(),
     );
     const filename = xlsxFilename();
     const outcome = await shareOrDownload(
@@ -2629,11 +2645,152 @@ function updateLegends(): void {
   const el = document.getElementById("view-legend");
   if (!el) return;
   try {
-    renderLegendPanel(el, currentLegends());
+    renderLegendPanel(el, [...currentLegends(), ...analysisLegends()]);
+    const board = document.getElementById("result-board-body");
+    if (board) renderResultBoard(board, [...mainBoardEntries(), ...analysisBoard()], (p) => flyToPoint(p));
   } catch {
     /* 초기화 전 — 다음 갱신 때 그린다 */
   }
 }
+
+/** 건물 중심(three 좌표, 중간 높이) — 결과판에서 위치로 이동할 때 */
+function buildingCenterById(id: string): THREE.Vector3 | undefined {
+  const b = project.buildings.find((x) => x.id === id);
+  if (!b) return undefined;
+  const c = footprintCentroid(worldFootprint(b));
+  return new THREE.Vector3(c.x, (b.terrainElevation ?? 0) + buildingHeight(b) / 2, -c.y);
+}
+
+/** 3D 화면을 한 점으로 — 지금 보는 방향은 유지하고 거리만 맞춘다 */
+function flyToPoint(p: THREE.Vector3, dist = 90): void {
+  const cur = viewer.getCameraView();
+  const dir = new THREE.Vector3(...cur.position).sub(new THREE.Vector3(...cur.target));
+  if (dir.lengthSq() < 1e-6) dir.set(1, 1, 1);
+  dir.setLength(dist);
+  const pos = p.clone().add(dir);
+  viewer.flyTo([pos.x, pos.y, pos.z], [p.x, p.y, p.z]);
+}
+
+/** 기존 검토(정북·채광·인동·일조권·시설·바람)의 결과판 항목 */
+function mainBoardEntries(): BoardEntry[] {
+  const out: BoardEntry[] = [];
+  if (lastNorthSetback && lastNorthSetback.checks.length > 0) {
+    const fails = lastNorthSetback.checks.filter((c) => !c.pass);
+    out.push({
+      title: "정북사선",
+      value: fails.length === 0 ? `${lastNorthSetback.checks.length}동 모두 적합` : `위반 ${fails.length} / ${lastNorthSetback.checks.length}동`,
+      verdict: fails.length === 0 ? "ok" : "bad",
+      items: fails.map((c) => ({
+        label: `${c.buildingName} — 높이 ${c.actualHeight.toFixed(1)}m > 허용 ${c.allowedHeight?.toFixed(1)}m`,
+        verdict: "bad" as const,
+        at: buildingCenterById(c.buildingId),
+      })),
+    });
+  }
+  if (lastDaylight && lastDaylight.checks.length > 0) {
+    const byB = new Map<string, { name: string; fail: number; n: number }>();
+    for (const c of lastDaylight.checks) {
+      const e = byB.get(c.buildingId) ?? { name: c.buildingName, fail: 0, n: 0 };
+      e.n++;
+      if (!c.pass) e.fail++;
+      byB.set(c.buildingId, e);
+    }
+    const bad = [...byB].filter(([, e]) => e.fail > 0);
+    out.push({
+      title: "채광사선",
+      value: bad.length === 0 ? `${byB.size}동 모두 적합` : `위반 ${bad.length} / ${byB.size}동`,
+      verdict: bad.length === 0 ? "ok" : "bad",
+      items: bad.map(([id, e]) => ({
+        label: `${e.name} — 창 ${e.fail}곳 위반`,
+        verdict: "bad" as const,
+        at: buildingCenterById(id),
+      })),
+    });
+  }
+  if (lastSpacing && lastSpacing.checks.length > 0) {
+    const fails = lastSpacing.checks.filter((c) => !c.pass);
+    out.push({
+      title: "인동거리",
+      value: fails.length === 0 ? `${lastSpacing.checks.length}쌍 모두 적합` : `위반 ${fails.length} / ${lastSpacing.checks.length}쌍`,
+      verdict: fails.length === 0 ? "ok" : "bad",
+      items: fails.map((c) => ({
+        label: `${c.aName} ↔ ${c.bName} — ${c.distance.toFixed(1)}m < ${c.required.toFixed(1)}m`,
+        verdict: "bad" as const,
+        at: new THREE.Vector3((c.pa.x + c.pb.x) / 2, 10, -(c.pa.y + c.pb.y) / 2),
+      })),
+    });
+  }
+  if (lastSunHours) {
+    const r = lastSunHours;
+    const items: BoardItem[] = r.summaries
+      .map((s) => ({ s, v: judgeBuilding(s, r.passRatio) }))
+      .filter(({ v }) => v !== "na")
+      .map(({ s, v }) => ({
+        label: `${s.name} — ${v === "pass" ? "적합" : "미달"}`,
+        verdict: v === "pass" ? ("ok" as const) : ("bad" as const),
+        at: buildingCenterById(s.buildingId),
+      }));
+    const fail = items.filter((i) => i.verdict === "bad").length;
+    out.push({
+      title: "일조권 (인접건물)",
+      value: `${items.length}동 중 미달 ${fail}동`,
+      verdict: fail === 0 ? "ok" : "bad",
+      items,
+    });
+  }
+  if (lastFacility && lastFacility.summaries.length > 0) {
+    const aff = lastFacility.summaries.filter((s) => s.affected);
+    out.push({
+      title: "유치원·학교·교회 일조",
+      value: `${lastFacility.summaries.length}동 중 사업 영향 ${aff.length}동`,
+      verdict: aff.length === 0 ? "ok" : "bad",
+      items: lastFacility.summaries.map((s) => ({
+        label: `${s.name} — ${s.affected ? `사업 영향 (미달 ${s.counts.project}·감소 ${s.counts.worse})` : "영향 없음"}`,
+        verdict: s.affected ? ("bad" as const) : ("ok" as const),
+        at: buildingCenterById(s.buildingId),
+      })),
+    });
+  }
+  if (lastSunHoursMap) {
+    out.push({
+      title: `일조시간 지도 (${lastSunHoursMap.date})`,
+      value:
+        `평균 ${lastSunHoursMap.stats.avg.toFixed(1)}h` +
+        (lastSunHoursMap.groundAvg !== null ? ` · 지면 ${lastSunHoursMap.groundAvg.toFixed(1)}h` : ""),
+      verdict: "info",
+    });
+  }
+  if (lastWind) {
+    out.push({
+      title: "바람길 (간이)",
+      value: `주풍향 ${windDirLabel(lastWind.windDir)} ${lastWind.windSpeedMs.toFixed(1)}m/s · 바람그림자 ${lastWind.shadowAreaM2.toFixed(0)}㎡`,
+      verdict: "info",
+    });
+  }
+  if (lastLbm) {
+    out.push({
+      title: "바람길 LBM",
+      value: `최대 증가율 +${((lastLbm.maxRatio - 1) * 100).toFixed(0)}% · 바람 그늘 ${lastLbm.shadowAreaM2.toFixed(0)}㎡`,
+      verdict: lastLbm.maxRatio > 1.5 ? "warn" : "info",
+    });
+  }
+  return out;
+}
+
+// ---------- 추가 분석 모듈 ----------
+const analysisCtx: AnalysisContext = {
+  project,
+  viewer,
+  elevate: () => terrainSampler(),
+  setStatus,
+  changed: () => updateLegends(),
+  flyTo: (p, d) => flyToPoint(p, d),
+  extras: {
+    lastLbm: () => lastLbm,
+  },
+};
+initAnalyses(analysisCtx);
+registerAnalysis(createUnitSunModule(analysisCtx));
 
 // ---------- 시점 저장 · JPG 내보내기 ----------
 

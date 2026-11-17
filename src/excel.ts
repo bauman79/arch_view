@@ -434,6 +434,7 @@ export function buildWorkbook(
   sunHoursMap: SunHoursMapResult | null = null,
   lbm: LbmResult | null = null,
   facility: FacilityResult | null = null,
+  extraSheets: { name: string; rows: Cell[][]; widths?: number[] }[] = [],
 ): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
   const overview = buildOverviewRows(project);
@@ -492,6 +493,9 @@ export function buildWorkbook(
       sheetFromRows(buildFacilityRows(facility), [0], [14, 10, 6, 6, 12, 12, 12, 12, 20]),
       "교육·종교시설 일조",
     );
+  }
+  for (const sh of extraSheets) {
+    XLSX.utils.book_append_sheet(wb, sheetFromRows(sh.rows, [0], sh.widths), sh.name.slice(0, 31));
   }
   return wb;
 }
@@ -557,6 +561,7 @@ export function buildXlsxBlob(
   sunHoursMap: SunHoursMapResult | null = null,
   lbm: LbmResult | null = null,
   facility: FacilityResult | null = null,
+  extraSheets: { name: string; rows: Cell[][]; widths?: number[] }[] = [],
 ): Blob {
   const wb = buildWorkbook(
     project,
@@ -568,6 +573,7 @@ export function buildXlsxBlob(
     sunHoursMap,
     lbm,
     facility,
+    extraSheets,
   );
   const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
   return new Blob([bytes], { type: XLSX_MIME });

@@ -170,13 +170,18 @@ function initHelpHint(): void {
 
 /** 좌측 패널 큰 섹션은 한 번에 하나만 펼친다 — 여러 개가 열려 길게 늘어지는 것을 막는다 */
 function initAccordion(): void {
-  const items = document.querySelectorAll<HTMLDetailsElement>("#left-panel details.lp-acc");
-  for (const d of items) {
-    d.addEventListener("toggle", () => {
-      if (!d.open) return;
-      for (const o of items) if (o !== d && o.open) o.open = false;
-    });
-  }
+  // 나중에 추가되는 분석 섹션도 포함되도록 패널에서 위임 처리 (toggle은 버블링되지 않아 capture)
+  document.getElementById("left-panel")?.addEventListener(
+    "toggle",
+    (ev) => {
+      const d = ev.target as HTMLElement;
+      if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("lp-acc") || !d.open) return;
+      for (const o of document.querySelectorAll<HTMLDetailsElement>("#left-panel details.lp-acc")) {
+        if (o !== d && o.open) o.open = false;
+      }
+    },
+    true,
+  );
 }
 
 export function initShell(): void {
