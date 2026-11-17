@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseDxfBuildings } from "./dxf";
 import {
+  extractContourPoints,
   buildTerrainModel,
   clipTriangles,
   contourLevels,
@@ -364,5 +365,19 @@ describe("data/sample_terrain.dxf — 배포 샘플 엔드투엔드", async () =
     expect(gl2).toBeGreaterThan(15);
     expect(gl2).toBeLessThan(21);
     expect(gl2 - gl1).toBeGreaterThan(8);
+  });
+});
+
+describe("mm 도면에 m로 적은 등고선 고도", () => {
+  const lw = (elevation: number) => ({ elevation, vertices: [{ x: 0, y: 0 }, { x: 1000, y: 0 }] });
+  it("mm 도면: 50000 → 50m, 50 → 50m(m로 적은 값), 섞여 있어도 같은 높이", () => {
+    const stats = { meterZ: 0 };
+    expect(extractContourPoints(lw(50000), "CONTOUR_50", 0.001, stats)![0].z).toBeCloseTo(50);
+    expect(stats.meterZ).toBe(0);
+    expect(extractContourPoints(lw(50), "CONTOUR_35", 0.001, stats)![0].z).toBeCloseTo(50);
+    expect(stats.meterZ).toBe(2);
+  });
+  it("m 도면은 그대로", () => {
+    expect(extractContourPoints(lw(0.5), "CONTOUR", 1)![0].z).toBeCloseTo(0.5);
   });
 });

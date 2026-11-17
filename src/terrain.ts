@@ -31,6 +31,8 @@ export function contourSuffixElevation(layerUpper: string): number | null {
 
 /**
  * CONTOUR 엔티티(LWPOLYLINE/POLYLINE/LINE) → 3D 점 목록(m).
+ * mm(·cm) 도면이라도 고도는 m로 적는 경우가 흔하다 — 도면 단위로 환산해 1m 미만이 되는 값(예: 50 →
+ * 0.05m)은 m로 적은 것으로 보고 그대로 쓴다(실제 지반고가 1m 미만인 경우는 드물다).
  * 고도 우선순위:
  *  ① 꼭짓점 Z(3D POLYLINE·LINE의 그룹코드 30) 또는 LWPOLYLINE 전체 elevation(그룹코드 38)
  *    — 도면 단위 좌표이므로 unitScale(mm→m 등)을 적용한다.
@@ -42,6 +44,7 @@ export function extractContourPoints(
   entity: any,
   layerUpper: string,
   unitScale: number,
+  stats?: { meterZ: number },
 ): Point3[] | null {
   if (!isContourLayer(layerUpper)) return null;
   const suffixZ = contourSuffixElevation(layerUpper);
@@ -55,6 +58,10 @@ export function extractContourPoints(
   for (const v of entity.vertices ?? []) {
     const rawZ = typeof v.z === "number" && v.z !== 0 ? v.z : entityElev;
     let z = rawZ * unitScale;
+    if (rawZ !== 0 && unitScale < 1 && Math.abs(z) < 1) {
+      z = rawZ; // m로 적은 고도
+      if (stats) stats.meterZ++;
+    }
     if (z === 0 && suffixZ !== null) z = suffixZ;
     out.push({ x: v.x * xSign * unitScale, y: v.y * unitScale, z });
   }

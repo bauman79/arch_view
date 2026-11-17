@@ -314,6 +314,8 @@ export function parseDxfBuildings(
   const floorTexts: { x: number; y: number; floors: number; layer: string }[] = [];
   /** 시설 용도 문자 (BLDG_USE) */
   const useTexts: { x: number; y: number; use: FacilityUse }[] = [];
+  /** 도면 단위가 mm인데 고도를 m로 적은 등고선 수 — 알림용 */
+  const contourStats = { meterZ: 0, lines: 0 };
 
   for (const entity of dxf.entities as any[]) {
     if (entity.type === "TEXT" || entity.type === "MTEXT") {
@@ -395,7 +397,9 @@ export function parseDxfBuildings(
 
     // M7 지형 — CONTOUR(_<고도>) 레이어: TIN용 3D 점 수집 + 참고선 오버레이 표시 겸용
     if (isContourLayer(upper)) {
-      const pts3 = extractContourPoints(entity, upper, unitScale);
+      const before = contourStats.meterZ;
+      const pts3 = extractContourPoints(entity, upper, unitScale, contourStats);
+      if (contourStats.meterZ > before) contourStats.lines++;
       if (!pts3 || pts3.length < 2) {
         warnings.push(`${layer} 레이어에 꼭짓점 2개 미만 선분 무시`);
         continue;
@@ -625,6 +629,12 @@ export function parseDxfBuildings(
     );
   }
 
+  if (contourStats.lines > 0) {
+    warnings.push(
+      `등고선 ${contourStats.lines}개는 고도값이 m 단위로 적힌 것으로 보고 그대로 m로 썼습니다 ` +
+        `(도면은 mm 단위 — 예: 50 → 50m). 의도와 다르면 고도값을 mm(50000)로 맞춰 주세요.`,
+    );
+  }
   const floorsFromText = applyFloorTexts(buildings, sourceLayers, floorTexts, warnings);
   const unitsFromDrawing = applyUnitPolygons(buildings, unitPolys, warnings);
   const usesFromText = applyUseTexts(buildings, useTexts, warnings);
