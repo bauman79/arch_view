@@ -37,6 +37,8 @@ export interface SchemeMetrics {
   north: CheckTally | null;
   daylight: CheckTally | null;
   spacing: CheckTally | null;
+  /** 저장 시점에 결과가 있던 분석(일조·바람·소음 등)의 대표 수치 — 옛 기록에는 없음 */
+  analyses?: { title: string; value: string }[];
 }
 
 export interface SchemeRecord {

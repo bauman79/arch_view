@@ -35,9 +35,20 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 }
 
+let collapsed = false;
+try {
+  collapsed = localStorage.getItem("legendCollapsed") === "1";
+} catch {
+  /* 저장소 없음 */
+}
+
 export function renderLegendPanel(el: HTMLElement, items: LegendItem[]): void {
   el.hidden = items.length === 0;
-  el.innerHTML = items
+  el.classList.toggle("collapsed", collapsed);
+  const head =
+    `<button class="lg-toggle" type="button" title="범례 ${collapsed ? "펼치기" : "접기"}">` +
+    `범례 ${items.length}개 ${collapsed ? "▸" : "▾"}</button>`;
+  el.innerHTML = head + items
     .map((it) => {
       let body: string;
       if (it.kind === "swatches") {
@@ -64,9 +75,18 @@ export function renderLegendPanel(el: HTMLElement, items: LegendItem[]): void {
           `</div>`;
       }
       const note = it.note ? `<div class="lg-note">${escapeHtml(it.note)}</div>` : "";
-      return `<div class="lg-item"><div class="lg-title">${escapeHtml(it.title)}</div>${body}${note}</div>`;
+      return `<div class="lg-item"><div class="lg-title">${escapeHtml(it.title)}</div>${collapsed ? "" : body + note}</div>`;
     })
     .join("");
+  el.querySelector(".lg-toggle")?.addEventListener("click", () => {
+    collapsed = !collapsed;
+    try {
+      localStorage.setItem("legendCollapsed", collapsed ? "1" : "0");
+    } catch {
+      /* 저장소 없음 */
+    }
+    renderLegendPanel(el, items);
+  });
 }
 
 /**

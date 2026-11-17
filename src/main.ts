@@ -122,6 +122,7 @@ import {
   type BoardItem,
 } from "./analyses";
 import { renderResultBoard } from "./resultboard";
+import { diagnoseDxfText, diagnosisHtml } from "./dxfdiag";
 import { createUnitSunModule } from "./unitsun";
 import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
 import { createShadowPlanModule } from "./shadowplan";
@@ -829,6 +830,22 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
       msg += `, 지형 로드됨 (고도 범위: ${terrainModel.minZ.toFixed(1)}m ~ ${terrainModel.maxZ.toFixed(1)}m)`;
     }
     if (warnings.length > 0) msg += ` (알림 ${warnings.length}건 — "자세히")`;
+    // 진단표 — 레이어 인식 현황 (기본 설정 > 도면 진단표)
+    const diag = diagnoseDxfText(text);
+    const winOf = (t: string) => buildings.filter((b) => b.type === t).reduce((a, b) => a + b.windowSegments.length, 0);
+    lastDiagHtml = diagnosisHtml(diag, {
+      fileName: sourceName,
+      plans: planBuildings.length,
+      adj: adjBuildings.length,
+      planWinMatched: winOf("계획주동"),
+      adjWinMatched: winOf("인접건물"),
+      floorsFromText,
+      overlays: overlays.length,
+      contourPoints: contourPoints.length,
+      warnings,
+    });
+    const unknown = diag.layers.filter((l) => l.category.startsWith("미인식")).length;
+    if (unknown > 0) msg += ` · 미인식 레이어 ${unknown}개 (도면 진단표 참고)`;
     setStatus(msg, warnings.length > 0 ? warnings.join("\n\n") : undefined);
     for (const w of warnings) console.warn("[DXF]", w);
     if (merge) commitHistory();
@@ -839,6 +856,18 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     console.error(err);
   }
 }
+
+// ---------- 도면 진단표 ----------
+let lastDiagHtml: string | null = null;
+document.getElementById("dxf-diag-btn")!.addEventListener("click", () => {
+  const modal = document.getElementById("diag-modal") as HTMLElement;
+  (document.getElementById("diag-body") as HTMLElement).innerHTML =
+    lastDiagHtml ?? `<p class="hint">아직 불러온 DXF가 없습니다.</p>`;
+  modal.hidden = false;
+});
+document.getElementById("diag-close")!.addEventListener("click", () => {
+  (document.getElementById("diag-modal") as HTMLElement).hidden = true;
+});
 
 const lockModal = document.getElementById("lock-modal") as HTMLElement;
 
@@ -2464,6 +2493,9 @@ function currentSchemeMetrics(): SchemeMetrics {
     north: tally(lastNorthSetback),
     daylight: tally(lastDaylight),
     spacing: tally(lastSpacing),
+    analyses: [...mainBoardEntries(), ...analysisBoard()]
+      .filter((e) => !["정북사선", "채광사선", "인동거리"].includes(e.title))
+      .map((e) => ({ title: e.title, value: e.value })),
   };
 }
 

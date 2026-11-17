@@ -1633,6 +1633,16 @@ export function renderCompareTable(schemes: SchemeRecord[]): void {
     }, null);
   }
 
+  // 저장 당시 실행해 둔 분석 결과 — 안마다 실행한 분석이 다를 수 있어 합집합으로 행을 만든다
+  const titles: string[] = [];
+  for (const rec of schemes) for (const a of rec.metrics.analyses ?? []) if (!titles.includes(a.title)) titles.push(a.title);
+  for (const t of titles) {
+    compareRow(tbody, t, schemes, (m) => {
+      const v = m.analyses?.find((a) => a.title === t)?.value;
+      return { text: v ?? "미실행", value: null, cls: v ? undefined : "na" };
+    }, null);
+  }
+
   compareRow(tbody, "저장", schemes, () => ({ text: "", value: null }), null);
   // 저장 시각 행은 metrics가 아니라 레코드에서 오므로 직접 채운다
   const savedRow = tbody.lastElementChild!;
