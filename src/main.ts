@@ -116,6 +116,7 @@ import {
   analysisLegends,
   analysisSheets,
   initAnalyses,
+  textSprite,
   invalidateAnalyses,
   notifyProjectLoaded,
   registerAnalysis,
@@ -387,6 +388,39 @@ function rebuildAll(): void {
     const g = createBuildingObject(b);
     groups.set(b.id, g);
     viewer.buildingsRoot.add(g);
+    addLabel(g, b);
+  }
+}
+
+// ---------- 동 라벨 ----------
+let labelsOn = false;
+
+/** "계획주동_A_1" → "A-1" */
+function shortName(b: Building): string {
+  const m = b.name.match(/_([A-Za-z0-9]+)_(\d+)$/);
+  return m ? `${m[1]}-${m[2]}` : b.name.replace(/^계획주동_?/, "");
+}
+
+function addLabel(g: THREE.Group, b: Building): void {
+  if (!labelsOn || b.type !== "계획주동") return;
+  const sp = textSprite(`${shortName(b)} · ${b.floors}F`, "#ffffff", 5, "rgba(30,41,59,0.85)");
+  sp.name = "label";
+  sp.layers.set(1); // 모형 스타일 AO 계산에서 빼기
+  sp.position.set(0, buildingHeight(b) + 5, 0);
+  g.add(sp);
+}
+
+function refreshLabels(): void {
+  for (const b of project.buildings) {
+    const g = groups.get(b.id);
+    if (!g) continue;
+    const old = g.getObjectByName("label") as THREE.Sprite | undefined;
+    if (old) {
+      g.remove(old);
+      old.material.map?.dispose();
+      old.material.dispose();
+    }
+    addLabel(g, b);
   }
 }
 
@@ -400,6 +434,7 @@ function rebuildOne(b: Building): void {
   const g = createBuildingObject(b);
   groups.set(b.id, g);
   viewer.buildingsRoot.add(g);
+  addLabel(g, b);
   if (b.id === selectedId) setSelected(g, true);
 }
 
@@ -3159,7 +3194,7 @@ function renderSavedViews(): void {
     go.title = "이 시점으로 이동 (더블클릭: 이름 바꾸기)";
     go.addEventListener("click", () => {
       viewer.flyTo(v.position, v.target);
-      for (const b of document.querySelectorAll("#view-presets .btn")) {
+      for (const b of document.querySelectorAll("#view-presets [data-view], #saved-views .btn")) {
         b.classList.toggle("active", b === go);
       }
       setStatus(`시점: ${v.name}`);
@@ -3194,6 +3229,64 @@ document.getElementById("save-cam-view")!.addEventListener("click", () => {
   setStatus(`지금 시점을 "${name}"(으)로 저장했습니다 — 버튼을 누르면 이 시점으로 돌아옵니다 (더블클릭으로 이름 변경, .view 저장 시 함께 저장)`);
 });
 
+/** 저장 이미지 오른쪽 위 방위표 + (평면에 가까운 시점이면) 축척 막대 */
+function drawCompassAndScale(ctx: CanvasRenderingContext2D, w: number, h: number, s: number): void {
+  const ang = viewer.screenNorthAngle(project.site.northAngle);
+  const cx = w - 40 * s, cy = 40 * s, r = 22 * s;
+  ctx.save();
+  ctx.fillStyle = "rgba(255,255,255,0.88)";
+  ctx.strokeStyle = "#334155";
+  ctx.lineWidth = 1.2 * s;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.translate(cx, cy);
+  ctx.rotate(ang);
+  ctx.fillStyle = "#1e293b";
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 0.8);
+  ctx.lineTo(r * 0.32, r * 0.45);
+  ctx.lineTo(0, r * 0.2);
+  ctx.lineTo(-r * 0.32, r * 0.45);
+  ctx.closePath();
+  ctx.fill();
+  ctx.font = `700 ${11 * s}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.fillText("N", 0, -r - 4 * s);
+  ctx.restore();
+  // 축척 막대 — 거의 내려다볼 때만 의미가 있다
+  const { pxPerM, downness } = viewer.scaleAtTarget();
+  if (downness < 0.85 || pxPerM <= 0) return;
+  const want = (w / s) * 0.15 / pxPerM;
+  const nice = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000].find((v) => v >= want) ?? 1000;
+  const len = nice * pxPerM * s;
+  const x1 = w - 24 * s, x0 = x1 - len, y = h - 28 * s;
+  ctx.save();
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fillRect(x0 - 8 * s, y - 20 * s, len + 16 * s, 30 * s);
+  ctx.fillStyle = "#1e293b";
+  ctx.fillRect(x0, y, len / 2, 4 * s);
+  ctx.strokeStyle = "#1e293b";
+  ctx.lineWidth = 1 * s;
+  ctx.strokeRect(x0, y, len, 4 * s);
+  ctx.font = `600 ${11 * s}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.fillText(`${nice}m`, x0 + len / 2, y - 6 * s);
+  ctx.restore();
+}
+
+document.getElementById("model-style-btn")!.addEventListener("click", (e) => {
+  viewer.setModelStyle(!viewer.modelStyle);
+  (e.currentTarget as HTMLElement).classList.toggle("active", viewer.modelStyle);
+  setStatus(viewer.modelStyle ? "모형 스타일 — 흰 점토 매스 + 부드러운 음영 (JPG 저장에도 반영)" : "기본 화면으로 돌아왔습니다.");
+});
+document.getElementById("labels-btn")!.addEventListener("click", (e) => {
+  labelsOn = !labelsOn;
+  (e.currentTarget as HTMLElement).classList.toggle("active", labelsOn);
+  refreshLabels();
+});
+
 async function exportJpg(whiteBackground: boolean): Promise<void> {
   const stamp = new Date();
   const pad = (x: number) => String(x).padStart(2, "0");
@@ -3204,7 +3297,10 @@ async function exportJpg(whiteBackground: boolean): Promise<void> {
     const legends = currentLegends();
     const blob = await viewer.captureJpeg(
       0.92,
-      (ctx, _w, h, scale) => drawLegendsOnCanvas(ctx, legends, h, scale),
+      (ctx, w, h, scale) => {
+        drawLegendsOnCanvas(ctx, legends, h, scale);
+        drawCompassAndScale(ctx, w, h, scale);
+      },
       { whiteBackground },
     );
     const picked = await saveToDesktop(blob, filename, "JPG 이미지", {
@@ -3237,7 +3333,7 @@ renderSavedViews();
 
 // 사용자가 직접 회전·이동하면 프리셋 표시를 해제 (더 이상 그 시점이 아니므로)
 viewer.controls.addEventListener("start", () => {
-  for (const b of document.querySelectorAll("#view-presets .btn")) {
+  for (const b of document.querySelectorAll("#view-presets [data-view], #saved-views .btn")) {
     b.classList.remove("active");
   }
 });

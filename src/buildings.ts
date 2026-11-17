@@ -376,6 +376,7 @@ export function createBuildingObject(b: Building): THREE.Group {
   }
 
   group.userData.buildingId = b.id;
+  group.userData.buildingType = b.type;
   applyOffset(group, b, centroid);
   return group;
 }

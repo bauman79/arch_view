@@ -1,5 +1,21 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+
+/** 모형 스타일 색 — 흰 점토 모형 느낌 (삽도용) */
+const MODEL_BG = 0xf3f2ee;
+const MODEL_COLOR = {
+  plan: 0xf6f4ee,
+  adj: 0xcdccc6,
+  edge: 0x77756e,
+  terrain: 0xe8e6df,
+  terrainEdge: 0xa19e95,
+  site: 0xdde6d3,
+  road: 0xc6c7c8,
+};
 
 /** 표준 시점 프리셋 — 태블릿에서 두 손가락으로 각도를 맞추기 어려운 점을 보완 */
 export type ViewPreset = "iso" | "top" | "south" | "east" | "west";
@@ -52,6 +68,16 @@ export class Viewer {
   /** 태양광원까지 거리(m) — 그림자 카메라가 장면 전체를 담도록 장면 크기에 맞춘다 */
   private sunDistance = 500;
   private resizeObserver: ResizeObserver | null = null;
+  /** 모형 스타일(흰 점토 + 앰비언트 오클루전) — 삽도용 */
+  modelStyle = false;
+  private composer: EffectComposer | null = null;
+  private gtao: GTAOPass | null = null;
+  /** AO 계산용 카메라 — 라벨(레이어 1)을 빼고 본다 (라벨이 검은 판으로 찍히지 않게) */
+  private aoCamera = new THREE.PerspectiveCamera();
+  /** AO 반경(m) — 장면 크기에 맞춤 */
+  private aoRadius = 6;
+  private hemi: THREE.HemisphereLight | null = null;
+  private groundHelperVis: boolean[] = [];
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -65,6 +91,7 @@ export class Viewer {
       5000,
     );
     this.camera.position.set(80, 90, 120);
+    this.camera.layers.enable(1); // 레이어 1 = 라벨 (AO 계산에서 제외)
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -111,7 +138,7 @@ export class Viewer {
         this.onResize();
       }
       this.controls.update();
-      this.renderer.render(this.scene, this.camera);
+      this.renderFrame();
     });
   }
 
@@ -131,6 +158,7 @@ export class Viewer {
 
   private setupLightsAndGround(): void {
     const hemi = new THREE.HemisphereLight(0xdde4f0, 0x30343c, 1.0);
+    this.hemi = hemi;
     this.scene.add(hemi);
 
     const grid = new THREE.GridHelper(400, 80, 0x1e2d4a, 0x131e35);
@@ -207,6 +235,9 @@ export class Viewer {
     if (this.sunLight.position.lengthSq() > 0) {
       this.sunLight.position.setLength(this.sunDistance);
     }
+    // 앰비언트 오클루전 반경 — 단지 규모에 맞춰 (건물 사이 골목·모서리 음영)
+    this.aoRadius = Math.min(12, Math.max(3, radius / 60));
+    this.gtao?.updateGtaoMaterial({ radius: this.aoRadius, thickness: this.aoRadius * 1.5 });
     // 그림자 맵 텍셀 크기에 비례한 법선 오프셋 — 넓은 장면일수록 텍셀이 커서 줄무늬가 잘 생긴다
     this.sunLight.shadow.normalBias = Math.max(0.15, ((2 * half) / want) * 1.5);
     const fog = this.scene.fog as THREE.Fog;
@@ -245,6 +276,152 @@ export class Viewer {
       .addScaledVector(dir, radius * (preset === "iso" ? 1.35 : 1.25));
     this.camera.updateProjectionMatrix();
     this.controls.update();
+  }
+
+  /** 한 프레임 그리기 — 모형 스타일이면 색을 맞추고 AO 후처리를 거친다 */
+  private renderFrame(): void {
+    if (this.modelStyle && this.composer) {
+      this.applyModelColors();
+      this.syncAoCamera();
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+  }
+
+  private syncAoCamera(): void {
+    this.aoCamera.copy(this.camera);
+    this.aoCamera.layers.set(0);
+  }
+
+  /** 모형 스타일 켜기/끄기 */
+  setModelStyle(on: boolean): void {
+    if (on === this.modelStyle) return;
+    this.modelStyle = on;
+    if (on) {
+      if (!this.composer) {
+        const w = this.container.clientWidth || 1;
+        const h = this.container.clientHeight || 1;
+        const comp = new EffectComposer(this.renderer);
+        comp.addPass(new RenderPass(this.scene, this.camera));
+        this.syncAoCamera();
+        const ao = new GTAOPass(this.scene, this.aoCamera, w, h);
+        ao.updateGtaoMaterial({ radius: this.aoRadius, distanceExponent: 1, thickness: this.aoRadius * 1.5, scale: 1.2, samples: 16 });
+        ao.blendIntensity = 1;
+        comp.addPass(ao);
+        comp.addPass(new OutputPass());
+        comp.setPixelRatio(this.renderer.getPixelRatio());
+        comp.setSize(w, h);
+        this.composer = comp;
+        this.gtao = ao;
+      }
+      this.scene.background = new THREE.Color(MODEL_BG);
+      (this.scene.fog as THREE.Fog).color.setHex(MODEL_BG);
+      this.groundHelperVis = this.groundHelpers.map((g) => g.visible);
+      for (const g of this.groundHelpers) g.visible = false;
+      if (this.hemi) {
+        this.hemi.color.setHex(0xffffff);
+        this.hemi.groundColor.setHex(0x8a8780);
+        this.hemi.intensity = 1.35;
+      }
+    } else {
+      this.scene.background = new THREE.Color(0x070d1a);
+      (this.scene.fog as THREE.Fog).color.setHex(0x070d1a);
+      this.groundHelpers.forEach((g, i) => (g.visible = this.groundHelperVis[i] ?? true));
+      if (this.hemi) {
+        this.hemi.color.setHex(0xdde4f0);
+        this.hemi.groundColor.setHex(0x30343c);
+        this.hemi.intensity = 1.0;
+      }
+      this.restoreColors();
+    }
+  }
+
+  /** 모형 색 지정 대상 판별 — 원래 색은 userData에 보관해 끌 때 되돌린다 */
+  private modelColorFor(obj: THREE.Object3D): number | null {
+    let bType: string | undefined;
+    for (let o: THREE.Object3D | null = obj; o; o = o.parent) {
+      if (o.userData.buildingType) {
+        bType = o.userData.buildingType as string;
+        break;
+      }
+    }
+    const isLine = (obj as THREE.LineSegments).isLineSegments || (obj as THREE.Line).isLine;
+    if ((obj as THREE.Sprite).isSprite) return null;
+    if (bType) {
+      if (obj.name === "window-hilite") return null;
+      if (isLine) return MODEL_COLOR.edge;
+      return bType === "계획주동" ? MODEL_COLOR.plan : MODEL_COLOR.adj;
+    }
+    const n = obj.name;
+    const parentName = obj.parent?.name ?? "";
+    if (n === "terrain-solid" || (parentName === "terrain-stepped" && !isLine)) return MODEL_COLOR.terrain;
+    if (parentName === "terrain-stepped" && isLine) return MODEL_COLOR.terrainEdge;
+    if (n === "site-drape" || n === "site-fill") return MODEL_COLOR.site;
+    if (n === "road-drape" || n === "road-fill") return MODEL_COLOR.road;
+    return null;
+  }
+
+  private applyModelColors(): void {
+    for (const root of [this.buildingsRoot, this.terrainRoot, this.overlaysRoot]) {
+      root.traverse((obj) => {
+        if (obj.userData.modelStyled) return;
+        if (obj.name === "window-hilite") {
+          // 창면 강조(파란 면)는 검토용 — 모형 스타일에서는 숨긴다
+          obj.userData.modelStyled = true;
+          obj.userData.wasVisible = obj.visible;
+          obj.visible = false;
+          return;
+        }
+        const mat = (obj as THREE.Mesh).material as THREE.MeshLambertMaterial | undefined;
+        if (!mat || Array.isArray(mat) || !mat.color) return;
+        const c = this.modelColorFor(obj);
+        obj.userData.modelStyled = true;
+        if (c === null) return;
+        obj.userData.origColor = mat.color.getHex();
+        mat.color.setHex(c);
+      });
+    }
+  }
+
+  private restoreColors(): void {
+    for (const root of [this.buildingsRoot, this.terrainRoot, this.overlaysRoot]) {
+      root.traverse((obj) => {
+        if (!obj.userData.modelStyled) return;
+        if (obj.userData.wasVisible !== undefined) {
+          obj.visible = obj.userData.wasVisible;
+          delete obj.userData.wasVisible;
+        }
+        const mat = (obj as THREE.Mesh).material as THREE.MeshLambertMaterial | undefined;
+        if (mat && !Array.isArray(mat) && obj.userData.origColor !== undefined) mat.color.setHex(obj.userData.origColor);
+        delete obj.userData.modelStyled;
+        delete obj.userData.origColor;
+      });
+    }
+  }
+
+  /** 화면에서 정북이 가리키는 각도 (라디안, 화면 위쪽 = 0, 시계방향 +) — 방위표용 */
+  screenNorthAngle(northAngleDeg: number): number {
+    const t = this.controls.target.clone();
+    const th = THREE.MathUtils.degToRad(northAngleDeg);
+    // 도면 진북 (−sinθ, cosθ) → three (x, −y)
+    const n = t.clone().add(new THREE.Vector3(-Math.sin(th) * 10, 0, -Math.cos(th) * 10));
+    const a = t.clone().project(this.camera);
+    const b = n.project(this.camera);
+    return Math.atan2(b.x - a.x, b.y - a.y);
+  }
+
+  /** 바라보는 점 부근에서 1m가 몇 화면 px인지 + 내려다보는 정도(1=수직) — 축척 막대용 */
+  scaleAtTarget(): { pxPerM: number; downness: number } {
+    const w = this.container.clientWidth;
+    const t = this.controls.target.clone();
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0).setY(0).normalize();
+    const a = t.clone().project(this.camera);
+    const b = t.clone().add(right.multiplyScalar(10)).project(this.camera);
+    const pxPerM = (Math.hypot(b.x - a.x, b.y - a.y) * w) / 2 / 10;
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    return { pxPerM, downness: -dir.y };
   }
 
   /** 현재 카메라 시점 (위치·바라보는 점) */
@@ -323,7 +500,15 @@ export class Viewer {
       this.scene.fog = null;
       for (const g of this.groundHelpers) g.visible = false;
     }
-    r.render(this.scene, this.camera);
+    if (this.modelStyle && this.composer) {
+      this.composer.setPixelRatio(ratio);
+      this.composer.setSize(w, h);
+      this.applyModelColors();
+      this.syncAoCamera();
+      this.composer.render();
+    } else {
+      r.render(this.scene, this.camera);
+    }
     // 렌더 직후(같은 작업 안) 2D 캔버스로 옮겨 범례 등을 덧그린다
     const out = document.createElement("canvas");
     out.width = r.domElement.width;
@@ -340,6 +525,10 @@ export class Viewer {
     });
     r.setPixelRatio(prev);
     r.setSize(w, h);
+    if (this.composer) {
+      this.composer.setPixelRatio(prev);
+      this.composer.setSize(w, h);
+    }
     if (hi > prevMap) {
       sh.mapSize.set(prevMap, prevMap);
       sh.map?.dispose();
@@ -361,5 +550,6 @@ export class Viewer {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
+    this.composer?.setSize(w, h);
   }
 }
