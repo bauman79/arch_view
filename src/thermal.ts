@@ -9,6 +9,7 @@ import {
   polygonMask,
   shadowCasters,
   shadowMask,
+  sitePolygons,
   type GroundGrid,
 } from "./groundshadow";
 import { yieldToEventLoop } from "./pv";
@@ -87,9 +88,10 @@ export async function runThermal(
   const { site, buildings } = project;
   const plans = buildings.filter((b) => b.type === "계획주동");
   if (plans.length === 0) throw new Error("계획주동이 없습니다");
-  const siteO = project.siteOverlays.find((o) => o.layer === "SITE_BOUNDARY" && o.closed && o.points.length >= 3);
+  const sites = sitePolygons(project.siteOverlays);
+  const siteO = sites.length > 0;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  const pts = siteO ? siteO.points : plans.flatMap((b) => worldFootprint(b));
+  const pts = siteO ? sites.flat() : plans.flatMap((b) => worldFootprint(b));
   for (const p of pts) {
     minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
     maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
@@ -97,7 +99,7 @@ export async function runThermal(
   const pad = siteO ? 0 : 30;
   const grid = makeGrid(minX - pad, minY - pad, maxX + pad, maxY + pad, opts.cell);
   const n = grid.nx * grid.ny;
-  const target = siteO ? polygonMask(grid, siteO.points) : new Uint8Array(n).fill(1);
+  const target = siteO ? polygonMask(grid, sites) : new Uint8Array(n).fill(1);
   const inside = insideMask(grid, buildings);
   const casters = shadowCasters(buildings);
   const year = project.analysis.date.slice(0, 4);

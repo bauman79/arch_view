@@ -127,6 +127,10 @@ import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
 import { createShadowPlanModule } from "./shadowplan";
 import { createShadeWalkModule } from "./shadewalk";
 import { createThermalModule } from "./thermal";
+import { createNoiseModule } from "./noise";
+import { createSkyViewModule } from "./skyview";
+import { createPrivacyModule } from "./privacy";
+import { createSkylineModule } from "./skyline";
 import {
   drawLegendsOnCanvas,
   gradientFromStops,
@@ -2834,6 +2838,10 @@ registerAnalysis(createUnitSunModule(analysisCtx));
 registerAnalysis(createShadowPlanModule(analysisCtx));
 registerAnalysis(createShadeWalkModule(analysisCtx));
 registerAnalysis(createThermalModule(analysisCtx));
+registerAnalysis(createNoiseModule(analysisCtx));
+registerAnalysis(createSkyViewModule(analysisCtx));
+registerAnalysis(createPrivacyModule(analysisCtx));
+registerAnalysis(createSkylineModule(analysisCtx));
 
 // ---------- 시점 저장 · JPG 내보내기 ----------
 

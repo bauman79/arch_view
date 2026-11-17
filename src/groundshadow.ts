@@ -1,7 +1,14 @@
 import * as THREE from "three";
 import { worldFootprint } from "./buildings";
 import { pointInPolygon } from "./geom2d";
-import { buildingHeight, type Building, type Point2 } from "./types";
+import { buildingHeight, type Building, type OverlayLine, type Point2 } from "./types";
+
+/** 대지경계 다각형 전부 (도면에 여러 조각으로 그려진 경우 모두) */
+export function sitePolygons(overlays: OverlayLine[]): Point2[][] {
+  return overlays
+    .filter((o) => o.layer === "SITE_BOUNDARY" && o.closed && o.points.length >= 3)
+    .map((o) => o.points);
+}
 
 /**
  * 지면 그림자 래스터 — 평지 가정의 해석적(2D) 그림자 판정.
@@ -181,10 +188,11 @@ export function insideMask(g: GroundGrid, buildings: Building[]): Uint8Array {
   return m;
 }
 
-/** 닫힌 다각형 하나의 셀 마스크 (예: 대지경계) */
-export function polygonMask(g: GroundGrid, pts: Point2[]): Uint8Array {
+/** 닫힌 다각형(들)의 셀 마스크 (예: 대지경계 조각 전부) */
+export function polygonMask(g: GroundGrid, polys: Point2[] | Point2[][]): Uint8Array {
   const m = new Uint8Array(g.nx * g.ny);
-  if (pts.length >= 3) fillPolygon(g, m, pts);
+  const list = (polys.length > 0 && Array.isArray(polys[0]) ? polys : [polys]) as Point2[][];
+  for (const pts of list) if (pts.length >= 3) fillPolygon(g, m, pts);
   return m;
 }
 

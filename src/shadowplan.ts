@@ -8,6 +8,7 @@ import {
   insideMask,
   makeGrid,
   polygonMask,
+  sitePolygons,
   segmentsToLines,
   segmentsToRibbon,
   shadowCasters,
@@ -122,10 +123,10 @@ export async function runShadowPlan(
   }
 
   const inside = insideMask(grid, buildings);
-  const siteOverlay = project.siteOverlays.find((o) => o.layer === "SITE_BOUNDARY" && o.closed && o.points.length >= 3);
+  const sites = sitePolygons(project.siteOverlays);
   const iso = opts.levels.map((level) => ({ level, segs: contourSegments(grid, hours, level - 1e-6) }));
   const cellA = grid.cell * grid.cell;
-  const siteM = siteOverlay ? polygonMask(grid, siteOverlay.points) : null;
+  const siteM = sites.length ? polygonMask(grid, sites) : null;
   const outsideArea = opts.levels.map((level) => {
     let a = 0;
     for (let k = 0; k < n; k++) {
