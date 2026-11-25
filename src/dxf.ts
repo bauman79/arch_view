@@ -255,7 +255,9 @@ function mergeAdjacentBuildingPolylines(
   const out: RawPolyline[] = [];
   for (const layer of order) {
     const list = byLayer.get(layer)!;
-    if (list.length <= 1) {
+    // 합치기는 계획주동(세대·코어 조각)만 — 주변 건물은 벽을 맞대도 서로 다른 건물이라
+    // 합치면 층수 문자가 섞인다(도시 블록의 연립 건물들)
+    if (list.length <= 1 || !layer.toUpperCase().startsWith("PLAN")) {
       out.push(...list);
       continue;
     }
@@ -436,7 +438,9 @@ export function parseDxfBuildings(
       continue;
     }
 
-    const overlayLayer = OVERLAY_LAYERS.find((l) => l === upper);
+    // PARCEL_SITE(대상지 내 필지) 등 PARCEL_ 접두 레이어도 필지로 — 나중에 지우기 쉽게 레이어만 나눠 둔 경우
+    const overlayLayer =
+      OVERLAY_LAYERS.find((l) => l === upper) ?? (upper.startsWith("PARCEL_") ? ("PARCEL" as OverlayLayer) : undefined);
     if (overlayLayer) {
       if (vertices.length < 2) {
         warnings.push(`${layer} 레이어에 꼭짓점 2개 미만 선분 무시`);
@@ -535,7 +539,8 @@ export function parseDxfBuildings(
     }
     // 타입 문자(A/B/…)는 "같은 타입 주동"을 뜻하므로 한 레이어의 형상은 모두 합동이어야 한다.
     // 구버전 PLAN_BLDG/ADJ_BLDG는 타입 구분이 없는 범용 레이어라 검사 대상이 아니다.
-    if (m.typeTag !== null) {
+    // 인접건물(ADJ_<타입>_<번호>)은 기존 건물이라 모양이 제각각인 게 정상 — 계획주동만 검사한다.
+    if (m.typeTag !== null && isPlan) {
       const list = shapesByTypeLayer.get(pl.layer) ?? [];
       list.push({
         name,

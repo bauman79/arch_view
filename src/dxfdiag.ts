@@ -28,7 +28,8 @@ const RULES: [RegExp, string][] = [
   [/^ROAD_CL$/, "도로중심선"],
   [/^ROAD_AREA$/, "도로 영역"],
   [/^PARK_BOUNDARY$/, "공원경계"],
-  [/^PARCEL$/, "필지선"],
+  [/^PARCEL_SITE$/, "필지선 (대상지 내)"],
+  [/^PARCEL/, "필지선"],
   [/^CONTOUR/, "등고선"],
 ];
 
