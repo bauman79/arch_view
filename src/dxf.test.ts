@@ -537,3 +537,43 @@ describe("인접건물 이름 (26동 초과 회귀)", () => {
     expect(names.every((n) => /^인접건물 [A-Z]+$/.test(n))).toBe(true);
   });
 });
+
+describe("세대 유니트 + 코어로 주동 만들기 (PLAN_ 외곽선 없이)", () => {
+  it("벽을 맞댄 UNIT_84·PLAN_CORE·UNIT_59 → 한 동, 평형별 세대수, 창면 인식", () => {
+    const text = dxfText({
+      entities:
+        // 84 | 코어 | 59  (가로로 맞댐) + 떨어진 두 번째 동(84 | 코어)
+        rectEntity("UNIT_84", 0, 0, 10000, 12000) +
+        rectEntity("PLAN_CORE", 10000, 0, 15000, 12000) +
+        rectEntity("UNIT_59", 15000, 0, 23000, 12000) +
+        rectEntity("UNIT_84", 50000, 0, 60000, 12000) +
+        rectEntity("PLAN_CORE", 60000, 0, 65000, 12000) +
+        rectEntity("PLAN_CORE", 90000, 0, 95000, 5000) + // 유니트 없는 코어 — 주동 아님
+        lineEntity("PLAN_WIN", 0, 0, 10000, 0),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    const plans = r.buildings.filter((b) => b.type === "계획주동");
+    expect(plans).toHaveLength(2);
+    const a = plans.find((b) => b.footprint.some((p) => p.x < 1))!;
+    expect(Math.abs(signedArea(a.footprint))).toBeCloseTo(23 * 12, 1);
+    expect(a.unitMix).toEqual([
+      { unitType: "59㎡", countPerFloor: 1 },
+      { unitType: "84㎡", countPerFloor: 1 },
+    ]);
+    expect(a.windowSegments).toHaveLength(1);
+    expect(r.warnings.some((w) => w.includes("계획주동 2동") && w.includes("코어 1개는 제외"))).toBe(true);
+  });
+
+  it("PLAN_ 외곽선 안의 유니트·코어는 기존대로 세대 구성에만 쓰인다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 15000, 12000) +
+        rectEntity("UNIT_84", 0, 0, 10000, 12000) +
+        rectEntity("PLAN_CORE", 10000, 0, 15000, 12000),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings).toHaveLength(1);
+    expect(r.buildings[0].name).toBe("계획주동_A_1");
+    expect(r.buildings[0].unitMix).toEqual([{ unitType: "84㎡", countPerFloor: 1 }]);
+  });
+});

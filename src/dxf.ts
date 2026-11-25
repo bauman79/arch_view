@@ -35,6 +35,12 @@ const OVERLAY_LAYERS: OverlayLayer[] = [
  * 닫힌 폴리라인 하나씩 그리면, 동별로 개수를 세어 "평형별 층당 세대수"로 넣는다.
  */
 const UNIT_LAYER_RE = /^UNIT_(\d+(?:\.\d+)?)$/;
+/**
+ * 코어 레이어 — 세대 유니트(UNIT_<평형>)와 코어를 벽을 맞대 그리면, 주동 외곽선(PLAN_)을 따로
+ * 그리지 않아도 맞댄 덩어리마다 계획주동 하나로 합쳐 불러온다.
+ */
+export const LAYER_CORE = "PLAN_CORE";
+const CORE_LAYER_RE = /^(PLAN_)?CORE$/;
 
 /** 레이어명 접미사로 층수 지정: PLAN_BLDG_15F, ADJ_BLDG_5F 등 (대소문자 무관) */
 const FLOOR_SUFFIX_RE = /_(\d+)F$/i;
@@ -312,6 +318,8 @@ export function parseDxfBuildings(
 
   /** 평형별 전용공간 (도면 좌표 m) — 건물이 정해진 뒤 외곽선 안에 든 것을 세어 세대 구성으로 쓴다 */
   const unitPolys: { unitType: string; points: Point2[] }[] = [];
+  /** 코어 폴리곤 (PLAN_CORE) — 유니트와 합쳐 주동 외곽선을 만든다 */
+  const corePolys: Point2[][] = [];
   /** 층수 문자 후보 (도면 좌표 m) — 건물이 정해진 뒤 외곽선 안에 든 것을 찾아 층수로 쓴다 */
   const floorTexts: { x: number; y: number; floors: number; layer: string }[] = [];
   /** 시설 용도 문자 (BLDG_USE) */
@@ -446,6 +454,16 @@ export function parseDxfBuildings(
       continue;
     }
 
+    if (CORE_LAYER_RE.test(upper)) {
+      const pts = [...vertices];
+      if (pts.length >= 2) {
+        const a = pts[0], b = pts[pts.length - 1];
+        if (Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9) pts.pop();
+      }
+      if (pts.length >= 3) corePolys.push(pts);
+      continue;
+    }
+
     const unitMatch = upper.match(UNIT_LAYER_RE);
     if (unitMatch) {
       // 첫점=끝점 중복 제거 — 닫힘 플래그 없이 그린 것도 받는다
@@ -512,6 +530,7 @@ export function parseDxfBuildings(
   }
   if (
     polylines.length === 0 &&
+    unitPolys.length === 0 &&
     overlays.length === 0 &&
     contourPoints.length === 0 &&
     planWinSegments.length === 0 &&
@@ -529,6 +548,7 @@ export function parseDxfBuildings(
   // 유니트·코어가 따로 그려진 동평면을 한 동으로 묶는다.
   // "같은 레이어에 떨어진 폴리곤 여러 개"(= 같은 타입 여러 동 배치)는 건드리지 않는다.
   const mergedPolylines = mergeAdjacentBuildingPolylines(polylines, warnings);
+  mergedPolylines.push(...assembleUnitCoreBuildings(polylines, unitPolys, corePolys, warnings));
 
   const buildings: Building[] = [];
   let planCount = 0;
@@ -671,6 +691,48 @@ export function parseDxfBuildings(
     buildings, overlays, contourPoints, warnings, unitScale, unitSource, floorsFromText, unitsFromDrawing,
     usesFromText,
   };
+}
+
+/**
+ * PLAN_ 외곽선 밖에 그려진 세대 유니트(UNIT_<평형>)·코어(PLAN_CORE)를 벽 공유로 묶어 계획주동
+ * 외곽선을 만든다. 유니트가 하나도 없는 덩어리(코어만)는 주동으로 보지 않는다.
+ * 만든 외곽선은 구버전 범용 레이어(PLAN_BLDG)로 넘겨 "계획주동 n"으로 이름 붙는다.
+ */
+function assembleUnitCoreBuildings(
+  planLines: RawPolyline[],
+  units: { unitType: string; points: Point2[] }[],
+  cores: Point2[][],
+  warnings: string[],
+): RawPolyline[] {
+  const outlines = planLines.filter((p) => matchBuildingLayer(p.layer)?.isPlan).map((p) => p.vertices);
+  const free = (pts: Point2[]) => {
+    const c = polygonCentroid(pts);
+    return !outlines.some((o) => pointInPolygon(c.x, c.y, o));
+  };
+  const pieces: { pts: Point2[]; unit: boolean }[] = [
+    ...units.filter((u) => free(u.points)).map((u) => ({ pts: u.points, unit: true })),
+    ...cores.filter(free).map((pts) => ({ pts, unit: false })),
+  ];
+  if (!pieces.some((p) => p.unit)) {
+    if (cores.length && !outlines.length) warnings.push(`${LAYER_CORE} 코어만 있고 세대 유니트(UNIT_<평형>)가 없어 주동을 만들지 않았습니다`);
+    return [];
+  }
+  const result = unionAdjacentPolygons(pieces.map((p) => p.pts));
+  for (const f of result.failures) warnings.push(`세대 유니트·코어 합치기 — ${f}`);
+  const out: RawPolyline[] = [];
+  let coreOnly = 0;
+  result.polygons.forEach((poly, i) => {
+    if (!result.sources[i].some((k) => pieces[k].unit)) {
+      coreOnly++;
+      return;
+    }
+    out.push({ layer: LAYER_PLAN_PREFIX, vertices: poly, closed: true });
+  });
+  warnings.push(
+    `세대 유니트(UNIT_)·코어(${LAYER_CORE}) ${pieces.length}개를 벽 공유로 묶어 계획주동 ${out.length}동을 만들었습니다` +
+      (coreOnly ? ` — 유니트와 맞닿지 않은 코어 ${coreOnly}개는 제외` : ""),
+  );
+  return out;
 }
 
 /** 밑줄(_)로 시작하는 레이어의 닫힌 폴리라인 = 범례 틀 → 도면 좌표(m) 경계 상자 */
