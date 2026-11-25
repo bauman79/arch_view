@@ -319,12 +319,31 @@ export function parseDxfBuildings(
   /** 도면 단위가 mm인데 고도를 m로 적은 등고선 수 — 알림용 */
   const contourStats = { meterZ: 0, lines: 0 };
 
+  // 범례(안내) 틀 — 밑줄(_)로 시작하는 레이어의 닫힌 폴리라인 안에 통째로 든 객체는 견본이라 읽지 않는다.
+  // 견본선을 실제 레이어(ADJ_WIN·PARCEL 등)에 그려 두어야 CAD에서 레이어 이름이 범례와 맞고
+  // 특성 일치(MATCHPROP)로 옮겨도 올바른 레이어가 되기 때문.
+  const noteBoxes = collectNoteFrames(dxf.entities as any[], unitScale);
+  const inNote = (pts: Point2[]) =>
+    noteBoxes.length > 0 &&
+    pts.length > 0 &&
+    noteBoxes.some((b) => pts.every((p) => p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1));
+  let noteSkipped = 0;
+
   for (const entity of dxf.entities as any[]) {
+    if (String(entity.layer ?? "").startsWith("_")) continue; // 안내 레이어 자체
     if (entity.type === "TEXT" || entity.type === "MTEXT") {
       const textLayer = String(entity.layer ?? "").toUpperCase();
+      const anchor = textAnchor(entity);
+      if (anchor && noteBoxes.length) {
+        const ez0: number = entity.extrusionDirectionZ ?? entity.extrusionDirection?.z ?? 1;
+        if (inNote([{ x: anchor.x * (ez0 < 0 ? -1 : 1) * unitScale, y: anchor.y * unitScale }])) {
+          noteSkipped++;
+          continue;
+        }
+      }
       if (textLayer === LAYER_USE_TEXT) {
         const use = parseUseText(String(entity.text ?? ""));
-        const pt = textAnchor(entity);
+        const pt = anchor;
         if (use && pt) {
           const ez: number = entity.extrusionDirectionZ ?? entity.extrusionDirection?.z ?? 1;
           useTexts.push({ x: pt.x * (ez < 0 ? -1 : 1) * unitScale, y: pt.y * unitScale, use });
@@ -334,10 +353,7 @@ export function parseDxfBuildings(
       const floors = parseFloorText(String(entity.text ?? ""));
       if (floors === null) continue;
       // TEXT는 정렬 지정(72/73)이 있으면 두 번째 정렬점(11)이 실제 기준 위치다
-      const aligned = entity.type === "TEXT" && ((entity.halign ?? 0) !== 0 || (entity.valign ?? 0) !== 0);
-      const pt = entity.type === "MTEXT"
-        ? entity.position
-        : aligned && entity.endPoint ? entity.endPoint : entity.startPoint;
+      const pt = anchor;
       if (!pt) continue;
       const ez: number = entity.extrusionDirectionZ ?? entity.extrusionDirection?.z ?? 1;
       floorTexts.push({
@@ -369,6 +385,10 @@ export function parseDxfBuildings(
       x: v.x * xSign * unitScale,
       y: v.y * unitScale,
     }));
+    if (inNote(vertices)) {
+      noteSkipped++;
+      continue;
+    }
 
     if (upper === LAYER_PLAN_WIN || upper === LAYER_ADJ_WIN) {
       if (vertices.length < 2) {
@@ -487,6 +507,9 @@ export function parseDxfBuildings(
     polylines.push({ layer: upper, vertices, closed });
   }
 
+  if (noteSkipped > 0) {
+    warnings.push(`범례 틀(_ 레이어 닫힌 사각형) 안의 견본 객체 ${noteSkipped}개는 읽지 않았습니다`);
+  }
   if (
     polylines.length === 0 &&
     overlays.length === 0 &&
@@ -648,6 +671,25 @@ export function parseDxfBuildings(
     buildings, overlays, contourPoints, warnings, unitScale, unitSource, floorsFromText, unitsFromDrawing,
     usesFromText,
   };
+}
+
+/** 밑줄(_)로 시작하는 레이어의 닫힌 폴리라인 = 범례 틀 → 도면 좌표(m) 경계 상자 */
+function collectNoteFrames(entities: any[], unitScale: number): { x0: number; y0: number; x1: number; y1: number }[] {
+  const out: { x0: number; y0: number; x1: number; y1: number }[] = [];
+  for (const e of entities) {
+    if (!String(e.layer ?? "").startsWith("_")) continue;
+    if (e.type !== "LWPOLYLINE" && e.type !== "POLYLINE") continue;
+    const vs: any[] = e.vertices ?? [];
+    if (vs.length < 3) continue;
+    const a = vs[0], b = vs[vs.length - 1];
+    const closed = e.shape === true || (e.flag & 1) === 1 || (vs.length >= 4 && Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9);
+    if (!closed) continue;
+    const ez: number = e.extrusionDirectionZ ?? e.extrusionDirection?.z ?? 1;
+    const xs = vs.map((v) => v.x * (ez < 0 ? -1 : 1) * unitScale);
+    const ys = vs.map((v) => v.y * unitScale);
+    out.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) });
+  }
+  return out;
 }
 
 /** TEXT는 정렬 지정(72/73)이 있으면 두 번째 정렬점(11)이 실제 기준 위치다 */
