@@ -844,7 +844,7 @@ export function refreshUnitInfo(b: Building): void {
 export function renderSiteTotals(
   buildings: Building[],
   siteAreaM2: number,
-  extra?: { retailM2: number; amenityPerUnit: number },
+  extra?: { retailM2: number; amenityPerUnit: number; areaTable?: import("./types").AreaTable },
 ): void {
   const t = siteUnitTotals(buildings);
   const s = coverageStats(buildings, siteAreaM2, extra);
@@ -869,7 +869,8 @@ export function renderSiteTotals(
         : `건폐율 ${s.bcrPct.toFixed(1)}% · 용적률 ${s.farPct!.toFixed(1)}%` +
           ` (건축면적 ${s.coverageM2.toFixed(0)}㎡ · 연면적 ${s.grossM2.toFixed(0)}㎡` +
           (s.extraM2 > 0 ? ` = 주거 ${s.residentialM2.toFixed(0)} + 근생·부대 ${s.extraM2.toFixed(0)}㎡` : "") +
-          `)`;
+          `)` +
+          (extra?.areaTable?.enabled ? " · 주거는 면적표 공급면적 기준" : " · 주거는 외곽선 면적 × 층수");
   }
 }
 

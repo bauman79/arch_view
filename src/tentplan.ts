@@ -1,7 +1,7 @@
 import { footprintCentroid, worldFootprint } from "./buildings";
 import { pointInPolygon, polygonPolygonClosest } from "./geom2d";
 import { sitePolygons } from "./groundshadow";
-import { footprintAreaM2 } from "./massing";
+import { footprintAreaM2, residentialFloorAreaM2 } from "./massing";
 import { violations, type LegalOpt } from "./maxfloors";
 import type { Building, Point2, Project } from "./types";
 
@@ -18,6 +18,8 @@ import type { Building, Point2, Project } from "./types";
 
 export interface TentOptions {
   target: { kind: "far" | "units"; value: number };
+  /** 평형별 면적표 — 켜져 있으면 주거 연면적을 공급면적 × 세대수로 */
+  areaTable?: import("./types").AreaTable;
   /** 근린생활시설 연면적 (㎡) */
   retailM2: number;
   /** 부대복리시설 세대당 면적 (㎡/세대) */
@@ -274,7 +276,7 @@ export function planTent(project: Project, legalMax: Map<string, number>, o: Ten
     for (const { b, f } of fs) {
       const rf = Math.max(0, f - Math.min(f, b.pilotiFloors));
       units += upf.get(b.id)! * rf;
-      res += footprintAreaM2(b) * rf;
+      res += residentialFloorAreaM2(b, o.areaTable) * rf;
     }
     const amenity = units * o.amenityPerUnit;
     const gross = res + o.retailM2 + amenity;
@@ -355,7 +357,7 @@ export function tentMetrics(
     const f = floors.get(b.id) ?? b.floors;
     const rf = Math.max(0, f - Math.min(f, b.pilotiFloors));
     units += unitsPerFloorOf(b, o.areaPerUnit) * rf;
-    res += footprintAreaM2(b) * rf;
+    res += residentialFloorAreaM2(b, o.areaTable) * rf;
   }
   const amenity = units * o.amenityPerUnit;
   const gross = res + o.retailM2 + amenity;

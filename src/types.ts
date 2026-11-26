@@ -250,6 +250,22 @@ export interface AnalysisSettings {
   gfaExtra?: GfaExtra;
   /** 분석 반경(m) — 대상지에서 이 거리 밖 주변 건물은 일조·그림자·바람 계산에서 뺀다. 0/없음 = 전부 */
   nearRadiusM?: number;
+  /** 평형별 면적표 — 켜면 주거 연면적을 공급면적(전용+주거공용) × 세대수로 산정 */
+  areaTable?: AreaTable;
+}
+
+/** 평형별 면적표 한 줄 — type은 평형 이름의 숫자(UNIT_84 → 84) */
+export interface AreaTableRow {
+  type: number;
+  /** 전용면적 (㎡/세대) */
+  exclusiveM2: number;
+  /** 주거공용면적 = 코어공용 + 벽체공용 (㎡/세대) */
+  commonM2: number;
+}
+
+export interface AreaTable {
+  enabled: boolean;
+  rows: AreaTableRow[];
 }
 
 /** 근린생활·부대복리시설 연면적 (개략) */

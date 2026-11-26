@@ -99,7 +99,7 @@ export function buildOverviewRows(project: Project): Cell[][] {
 
   for (const b of planBuildings) {
     const area = footprintAreaM2(b);
-    const gfa = grossFloorAreaM2(b);
+    const gfa = grossFloorAreaM2(b, project.analysis.areaTable);
     const buildingCells: Cell[] = [
       buildingTypeLabel(b),
       mirrorLabel(b),
@@ -135,7 +135,7 @@ export function buildOverviewRows(project: Project): Cell[][] {
   }
 
   // 합계 (계획주동 기준)
-  const stats = coverageStats(buildings, siteArea, project.analysis.gfaExtra);
+  const stats = coverageStats(buildings, siteArea, { ...(project.analysis.gfaExtra ?? { retailM2: 0, amenityPerUnit: 0 }), areaTable: project.analysis.areaTable });
   const totals = siteUnitTotals(buildings);
   rows.push([
     "합계 (계획주동)",
@@ -174,7 +174,9 @@ export function buildOverviewRows(project: Project): Cell[][] {
   rows.push(["대지면적(㎡)", hasSite ? siteArea : "미입력"]);
   rows.push([
     "비고",
-    "연면적 = 건축면적 × 주거층수(필로티 제외) 근사 · 건폐율·용적률은 계획주동만 산입",
+    project.analysis.areaTable?.enabled
+      ? "주거 연면적 = Σ 층당 세대 × 면적표 공급면적(전용+주거공용) × 주거층수 (평형 구성 없는 동은 건축면적 × 주거층수) · 건폐율·용적률은 계획주동만 산입"
+      : "연면적 = 건축면적 × 주거층수(필로티 제외) 근사 · 건폐율·용적률은 계획주동만 산입",
   ]);
   return rows;
 }

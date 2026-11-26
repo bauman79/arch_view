@@ -1,5 +1,5 @@
 import { signedArea } from "./geom2d";
-import type { Building, MassType, Point2, UnitMixEntry } from "./types";
+import type { AreaTable, AreaTableRow, Building, MassType, Point2, UnitMixEntry } from "./types";
 
 /**
  * M6 — 주동 타입 템플릿 + 세대수 자동산출 (plan.md 4장 주동 타입 템플릿, 5장 7항).
@@ -198,9 +198,61 @@ export function footprintAreaM2(b: Building): number {
   return Math.abs(signedArea(b.footprint));
 }
 
-/** 연면적 근사 = footprint 면적 × 주거층수 (필로티 층은 바닥면적 산입 제외 근사) */
-export function grossFloorAreaM2(b: Building): number {
-  return footprintAreaM2(b) * residentialFloors(b);
+/**
+ * 기본 면적표 — 서울 신통기획 공동주택 개략 면적표 예(전용 + 주거공용 = 공급). 사용자가 면적표 엑셀을
+ * 불러오거나 직접 고치면 그 값으로 바뀐다.
+ */
+export const DEFAULT_AREA_ROWS: AreaTableRow[] = [
+  { type: 39, exclusiveM2: 39.96, commonM2: 17.65 },
+  { type: 49, exclusiveM2: 49.96, commonM2: 19.65 },
+  { type: 59, exclusiveM2: 59.98, commonM2: 22.65 },
+  { type: 74, exclusiveM2: 74.98, commonM2: 26.95 },
+  { type: 84, exclusiveM2: 84.97, commonM2: 29.25 },
+  { type: 109, exclusiveM2: 109.97, commonM2: 30.65 },
+];
+
+/**
+ * 평형 이름(예: "84㎡")의 세대당 공급면적. 면적표에 같은 숫자 평형이 있으면 그 값,
+ * 없으면 전용 = 평형 숫자로 보고 주거공용은 가까운 두 평형 사이 선형 보간(양끝은 끝값). 숫자가 아니면 null.
+ */
+export function supplyAreaOf(unitType: string, rows: AreaTableRow[]): number | null {
+  const n = parseFloat(unitType);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const sorted = [...rows].filter((r) => r.type > 0).sort((a, b) => a.type - b.type);
+  if (!sorted.length) return null;
+  const hit = sorted.find((r) => Math.abs(r.type - n) < 0.5);
+  if (hit) return hit.exclusiveM2 + hit.commonM2;
+  let common: number;
+  if (n <= sorted[0].type) common = sorted[0].commonM2;
+  else if (n >= sorted[sorted.length - 1].type) common = sorted[sorted.length - 1].commonM2;
+  else {
+    const i = sorted.findIndex((r) => r.type > n);
+    const a = sorted[i - 1], b = sorted[i];
+    common = a.commonM2 + ((n - a.type) / (b.type - a.type)) * (b.commonM2 - a.commonM2);
+  }
+  return n + common;
+}
+
+/**
+ * 한 층 주거 바닥면적 — 면적표를 켜고 동에 평형 구성이 있으면 Σ(층당 세대 × 공급면적),
+ * 아니면 외곽선 면적(발코니 등이 들어가 실제 면적표보다 크게 나온다).
+ */
+export function residentialFloorAreaM2(b: Building, table?: AreaTable): number {
+  if (table?.enabled && b.unitMix.length > 0) {
+    let s = 0;
+    for (const m of b.unitMix) {
+      const a = supplyAreaOf(m.unitType, table.rows);
+      if (a === null) return footprintAreaM2(b);
+      s += a * Math.max(0, m.countPerFloor);
+    }
+    if (s > 0) return s * Math.max(1, b.segments);
+  }
+  return footprintAreaM2(b);
+}
+
+/** 주거 연면적 = 한 층 주거 바닥면적 × 주거층수 (필로티 층 제외) */
+export function grossFloorAreaM2(b: Building, table?: AreaTable): number {
+  return residentialFloorAreaM2(b, table) * residentialFloors(b);
 }
 
 export interface CoverageStats {
@@ -222,14 +274,14 @@ export interface CoverageStats {
 export function coverageStats(
   buildings: Building[],
   siteAreaM2: number,
-  extra?: { retailM2: number; amenityPerUnit: number },
+  extra?: { retailM2: number; amenityPerUnit: number; areaTable?: AreaTable },
 ): CoverageStats {
   let coverageM2 = 0;
   let residentialM2 = 0;
   for (const b of buildings) {
     if (b.type !== "계획주동") continue;
     coverageM2 += footprintAreaM2(b);
-    residentialM2 += grossFloorAreaM2(b);
+    residentialM2 += grossFloorAreaM2(b, extra?.areaTable);
   }
   const extraM2 = extra
     ? Math.max(0, extra.retailM2) + Math.max(0, extra.amenityPerUnit) * siteUnitTotals(buildings).total

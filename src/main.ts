@@ -50,6 +50,7 @@ import {
 } from "./viewfile";
 import { EPW_FILES } from "./epw";
 import { nearbyBuildings } from "./nearby";
+import { parseAreaTableSheet } from "./areatable";
 import {
   coverageStats,
   createTemplateBuilding,
@@ -60,6 +61,7 @@ import {
   totalUnits,
   unitBreakdown,
   unitSizeBands,
+  DEFAULT_AREA_ROWS,
 } from "./massing";
 import { createSpacingOverlay, runSpacingCheck, type SpacingResult } from "./spacing";
 import { formatMinutes, localDate, sunPosition } from "./sun";
@@ -157,6 +159,7 @@ import {
   mirrorLabel,
   seoulSetbackRules,
   statutorySetbackRules,
+  type AreaTable,
   type Building,
   type Canopy,
   type Tree,
@@ -1138,6 +1141,7 @@ async function runTentPlan(free: boolean): Promise<void> {
     edgeRadius: num("tp-radius", 100),
     shape: num("tp-shape", 1),
     areaPerUnit: num("tp-apu", 110),
+    areaTable: project.analysis.areaTable,
     northWeight: num("tp-north", 0.5),
     towerMinArea: num("tp-tarea", 400),
     towerMaxAspect: num("tp-tasp", 1.4),
@@ -1402,7 +1406,7 @@ document.getElementById("export-report")!.addEventListener("click", async () => 
     if (lbmStreamGroup) lbmStreamGroup.visible = lbmStreamChk.checked;
   }
   const t = siteUnitTotals(project.buildings);
-  const cov = coverageStats(project.buildings, project.site.siteAreaM2, project.analysis.gfaExtra);
+  const cov = coverageStats(project.buildings, project.site.siteAreaM2, gfaOpts());
   const now = new Date();
   const html = buildReportHtml({
     title: `배치 검토 보고서${lastDxfName ? ` — ${lastDxfName.replace(/\.dxf$/i, "")}` : ""}`,
@@ -2395,7 +2399,7 @@ const siteAreaInput = document.getElementById("site-area") as HTMLInputElement;
 function updateSiteTotals(): void {
   project.site.siteAreaM2 = Math.max(0, parseFloat(siteAreaInput.value) || 0);
   syncGfaExtra();
-  renderSiteTotals(project.buildings, project.site.siteAreaM2, project.analysis.gfaExtra);
+  renderSiteTotals(project.buildings, project.site.siteAreaM2, gfaOpts());
 }
 
 const nearRadiusInput = document.getElementById("near-radius") as HTMLInputElement;
@@ -2411,6 +2415,107 @@ nearRadiusInput.addEventListener("change", () => {
   );
   commitHistory();
 });
+// ---------- 평형별 면적표 ----------
+function areaTable(): AreaTable {
+  if (!project.analysis.areaTable) {
+    project.analysis.areaTable = { enabled: false, rows: DEFAULT_AREA_ROWS.map((r) => ({ ...r })) };
+  }
+  return project.analysis.areaTable;
+}
+function renderAreaTable(): void {
+  const t = areaTable();
+  (document.getElementById("area-table-on") as HTMLInputElement).checked = t.enabled;
+  const host = document.getElementById("area-table") as HTMLTableElement;
+  const f2 = (v: number) => (Math.round(v * 100) / 100).toString();
+  host.innerHTML =
+    `<tr><th>평형</th><th class="num">전용</th><th class="num">주거공용</th><th class="num">공급</th><th></th></tr>` +
+    t.rows
+      .map(
+        (r, i) =>
+          `<tr><td><input data-at="${i}" data-k="type" type="number" step="1" value="${r.type}" style="width:48px" /></td>` +
+          `<td class="num"><input data-at="${i}" data-k="exclusiveM2" type="number" step="0.01" value="${f2(r.exclusiveM2)}" style="width:62px" /></td>` +
+          `<td class="num"><input data-at="${i}" data-k="commonM2" type="number" step="0.01" value="${f2(r.commonM2)}" style="width:62px" /></td>` +
+          `<td class="num">${f2(r.exclusiveM2 + r.commonM2)}</td>` +
+          `<td><button class="btn mini" data-at-del="${i}" type="button" title="이 행 삭제">×</button></td></tr>`,
+      )
+      .join("");
+}
+function areaTableChanged(): void {
+  updateSiteTotals();
+  commitHistory();
+}
+document.getElementById("area-table-on")!.addEventListener("change", (e) => {
+  areaTable().enabled = (e.target as HTMLInputElement).checked;
+  areaTableChanged();
+  setStatus(areaTable().enabled ? "면적표 공급면적으로 주거 연면적을 산정합니다" : "외곽선 면적 × 층수로 주거 연면적을 산정합니다");
+});
+document.getElementById("area-table")!.addEventListener("change", (e) => {
+  const el = e.target as HTMLInputElement;
+  const i = Number(el.dataset.at);
+  const k = el.dataset.k as "type" | "exclusiveM2" | "commonM2" | undefined;
+  const row = areaTable().rows[i];
+  if (!row || !k) return;
+  row[k] = Math.max(0, parseFloat(el.value) || 0);
+  renderAreaTable();
+  areaTableChanged();
+});
+document.getElementById("area-table")!.addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>("[data-at-del]");
+  if (!b) return;
+  areaTable().rows.splice(Number(b.dataset.atDel), 1);
+  renderAreaTable();
+  areaTableChanged();
+});
+renderAreaTable();
+document.getElementById("area-table-add")!.addEventListener("click", () => {
+  areaTable().rows.push({ type: 0, exclusiveM2: 0, commonM2: 0 });
+  renderAreaTable();
+});
+document.getElementById("area-table-file")!.addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    const XLSX = (await import("xlsx-js-style")).default;
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    let got: ReturnType<typeof parseAreaTableSheet> = null;
+    for (const n of wb.SheetNames) {
+      got = parseAreaTableSheet(XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n], { header: 1, raw: true }));
+      if (got) break;
+    }
+    if (!got) {
+      setStatus(`${file.name}: 'TYPE·전용면적·공급면적' 머리글이 있는 분양면적표를 찾지 못했습니다`);
+      return;
+    }
+    const t = areaTable();
+    t.rows = got.rows;
+    t.enabled = true;
+    if (got.amenityPerUnit !== undefined) gfaAmenityInput.value = String(got.amenityPerUnit);
+    if (got.retailM2 !== undefined) gfaRetailInput.value = String(got.retailM2);
+    // 용적률은 계획대지 기준 — 구역계(SITE_BOUNDARY) 면적에는 도로·공원 등 제외면적이 들어 있다
+    if (got.siteAreaM2 !== undefined) siteAreaInput.value = String(got.siteAreaM2);
+    renderAreaTable();
+    areaTableChanged();
+    const note =
+      `${file.name} — 평형 ${got.rows.length}종` +
+      (got.units ? ` · 면적표 ${got.units.toLocaleString()}세대` : "") +
+      (got.farGfaM2 ? ` · 용적률산정연면적 ${Math.round(got.farGfaM2).toLocaleString()}㎡` : "") +
+      (got.amenityPerUnit !== undefined ? ` · 부대복리 ${got.amenityPerUnit}㎡/세대` : "") +
+      (got.retailM2 !== undefined ? ` · 근생 ${got.retailM2.toLocaleString()}㎡` : "") +
+      (got.siteAreaM2 !== undefined ? ` · 계획대지 ${got.siteAreaM2.toLocaleString()}㎡ → 대지면적` : "");
+    (document.getElementById("area-table-note") as HTMLElement).textContent = note;
+    setStatus(`면적표 불러옴: ${note}`);
+  } catch (err) {
+    setStatus(`면적표 불러오기 실패: ${(err as Error).message}`);
+  }
+});
+
+/** 용적률 산정 옵션 — 근생·부대 + 평형별 면적표 */
+function gfaOpts() {
+  const ex = project.analysis.gfaExtra ?? { retailM2: 0, amenityPerUnit: 0 };
+  return { ...ex, areaTable: project.analysis.areaTable };
+}
 const gfaRetailInput = document.getElementById("gfa-retail") as HTMLInputElement;
 const gfaAmenityInput = document.getElementById("gfa-amenity") as HTMLInputElement;
 /** 근생·부대 입력값 → project (용적률 표시·엑셀·보고서·자동 배분 공용) */
@@ -2581,6 +2686,7 @@ function applyProjectToInputs(): void {
   gfaRetailInput.value = String(project.analysis.gfaExtra?.retailM2 ?? 0);
   gfaAmenityInput.value = String(project.analysis.gfaExtra?.amenityPerUnit ?? 0);
   nearRadiusInput.value = String(project.analysis.nearRadiusM ?? 0);
+  renderAreaTable();
   nearCache = null;
   fillSetbackInputs(project.analysis.setbackRules);
   sunHoursRuleSelect.value = project.analysis.sunHours.rule;
@@ -3250,7 +3356,7 @@ const compareModal = document.getElementById("compare-modal") as HTMLElement;
 function currentSchemeMetrics(): SchemeMetrics {
   syncAllSettings();
   const t = siteUnitTotals(project.buildings);
-  const cov = coverageStats(project.buildings, project.site.siteAreaM2, project.analysis.gfaExtra);
+  const cov = coverageStats(project.buildings, project.site.siteAreaM2, gfaOpts());
   const tally = <T extends { checks: { pass: boolean }[] }>(
     r: T | null,
   ): CheckTally | null =>
