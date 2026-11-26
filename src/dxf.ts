@@ -1,7 +1,7 @@
 import DxfParser from "dxf-parser";
 import { FixedLwpolylineParser } from "./dxf-lwpolyline";
 import { pointInPolygon, signedArea } from "./geom2d";
-import { defaultUnitMix } from "./massing";
+import { defaultUnitMix, planTypeOf } from "./massing";
 import { extractContourPoints, isContourLayer } from "./terrain";
 import { unionAdjacentPolygons } from "./polyunion";
 import { segmentLiesOnEdge, WINDOW_MATCH_TOLERANCE } from "./windows";
@@ -651,6 +651,8 @@ export function parseDxfBuildings(
   // 영향이 없지만, 목록에서 이름(…-5, …-6)만으로는 어느 동이 다른 형상인지 알 수 없어
   // "같은 타입을 복사·미러한 것"으로 오인하기 쉽다.
   const shapeOddNames = new Set<string>();
+  /** 유니트(UNIT_)가 들어 세대 구성이 도면으로 정해진 계획주동 */
+  const unitHosts = new Set<Building>();
   for (const [layer, list] of shapesByTypeLayer) {
     const groups = new Map<string, { names: string[]; area: number }>();
     for (const s of list) {
@@ -728,9 +730,30 @@ export function parseDxfBuildings(
     );
   }
   const floorsFromText = applyFloorTexts(buildings, sourceLayers, floorTexts, warnings, issues);
-  const unitsFromDrawing = applyUnitPolygons(buildings, unitPolys, warnings, issues);
-  // 형상이 다른 계획주동(소수 쪽) — 이름으로 건물을 찾아 이동할 수 있게
-  for (const b of buildings) {
+  const unitsFromDrawing = applyUnitPolygons(buildings, unitPolys, warnings, issues, unitHosts);
+  // 계획주동이 모두 한 타입 레이어(예: PLAN_G_5 하나)에 그려졌으면 레이어로는 타입 구분이 안 된다 —
+  // 유니트로 세대 구성이 정해진 동은 평형 구성(예: 59x2+84x1)을 타입으로 쓴다.
+  let typedByUnits = false;
+  {
+    const plans = buildings.filter((b) => b.type === "계획주동" && !b.planType);
+    const tags = new Set(plans.map((b) => planTypeOf(b.name)));
+    if (tags.size <= 1) {
+      for (const b of plans) {
+        if (!unitHosts.has(b)) continue;
+        b.planType = [...b.unitMix]
+          .sort((x, y) => parseFloat(x.unitType) - parseFloat(y.unitType))
+          .map((u) => `${u.unitType.replace("㎡", "")}x${u.countPerFloor}`)
+          .join("+");
+        typedByUnits = true;
+      }
+    }
+  }
+  // 형상이 다른 계획주동(소수 쪽) — 이름으로 건물을 찾아 이동할 수 있게.
+  // 평형 구성으로 타입을 나눈 경우(한 레이어에 모든 동)는 형상이 다른 게 정상이라 항목으로 띄우지 않는다
+  if (typedByUnits) {
+    warnings.push("계획주동이 한 레이어에 모두 있어, 유니트(UNIT_) 평형 구성을 동 타입으로 썼습니다 (층수 일괄 입력에서 같은 구성끼리 묶임)");
+  }
+  for (const b of typedByUnits ? [] : buildings) {
     if (shapeOddNames.has(b.name)) {
       issues.push({ kind: "형상 다름", message: `${b.name} — 같은 타입 레이어의 다른 동과 형상이 다름`, building: b });
     }
@@ -1024,6 +1047,7 @@ function applyUnitPolygons(
   units: { unitType: string; points: Point2[] }[],
   warnings: string[],
   issues: DxfIssue[] = [],
+  hosts?: Set<Building>,
 ): number {
   if (units.length === 0) return 0;
   const plans = buildings.filter((b) => b.type === "계획주동");
@@ -1045,6 +1069,7 @@ function applyUnitPolygons(
     counts.set(host, m);
   }
   for (const [b, m] of counts) {
+    hosts?.add(b);
     b.unitMix = [...m.entries()]
       .sort((x, y) => parseFloat(x[0]) - parseFloat(y[0]))
       .map(([unitType, countPerFloor]) => ({ unitType, countPerFloor }));

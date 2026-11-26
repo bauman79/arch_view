@@ -623,3 +623,30 @@ describe("확인 필요 항목 (issues)", () => {
     expect(r.issues.find((i) => i.kind === "층수 충돌")!.building!.floors).toBe(4);
   });
 });
+
+describe("한 레이어에 모든 주동 — 평형 구성을 타입으로", () => {
+  it("PLAN_G_5 하나에 구성이 다른 두 동 → 타입 59x1+84x1 / 84x2", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_G_5", 0, 0, 20000, 10000) +
+        rectEntity("UNIT_59", 0, 0, 10000, 10000) +
+        rectEntity("UNIT_84", 10000, 0, 20000, 10000) +
+        rectEntity("PLAN_G_5", 50000, 0, 70000, 10000) +
+        rectEntity("UNIT_84", 50000, 0, 60000, 10000) +
+        rectEntity("UNIT_84", 60000, 0, 70000, 10000),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings.map((b) => planTypeOfBuilding(b)).sort()).toEqual(["59x1+84x1", "84x2"]);
+  });
+  it("타입 레이어가 둘 이상이면 레이어 타입 유지", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_A_1", 0, 0, 20000, 10000) +
+        rectEntity("UNIT_59", 0, 0, 10000, 10000) +
+        rectEntity("PLAN_B_1", 50000, 0, 70000, 10000) +
+        rectEntity("UNIT_84", 50000, 0, 60000, 10000),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings.map((b) => planTypeOfBuilding(b)).sort()).toEqual(["A", "B"]);
+  });
+});
