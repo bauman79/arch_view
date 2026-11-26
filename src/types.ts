@@ -248,6 +248,8 @@ export interface AnalysisSettings {
   facility?: FacilitySunSettings;
   /** 주거 외 지상 연면적 — 용적률에 더한다 (없으면 0) */
   gfaExtra?: GfaExtra;
+  /** 분석 반경(m) — 대상지에서 이 거리 밖 주변 건물은 일조·그림자·바람 계산에서 뺀다. 0/없음 = 전부 */
+  nearRadiusM?: number;
 }
 
 /** 근린생활·부대복리시설 연면적 (개략) */

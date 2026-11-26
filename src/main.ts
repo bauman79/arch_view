@@ -49,6 +49,7 @@ import {
   type ViewFileData,
 } from "./viewfile";
 import { EPW_FILES } from "./epw";
+import { nearbyBuildings } from "./nearby";
 import {
   coverageStats,
   createTemplateBuilding,
@@ -212,6 +213,25 @@ registerSW({ immediate: true });
 initShell();
 
 const project: Project = defaultProject();
+
+/** 분석 반경 안 건물 (계획주동 + 가까운 주변 건물) — 배치가 바뀌면 invalidateAnalysis에서 비운다 */
+let nearCache: { src: Building[]; len: number; r: number; list: Building[] } | null = null;
+function analysisBuildings(): Building[] {
+  const r = project.analysis.nearRadiusM ?? 0;
+  if (!(r > 0)) return project.buildings;
+  if (nearCache && nearCache.src === project.buildings && nearCache.len === project.buildings.length && nearCache.r === r) {
+    return nearCache.list;
+  }
+  const list = nearbyBuildings(project.buildings, project.siteOverlays, r);
+  nearCache = { src: project.buildings, len: project.buildings.length, r, list };
+  return list;
+}
+/** 분석용 프로젝트 — buildings만 분석 반경으로 거른다(나머지 읽기·쓰기는 원본 그대로) */
+const analysisProject: Project = new Proxy(project, {
+  get(t, k, recv) {
+    return k === "buildings" ? analysisBuildings() : Reflect.get(t, k, recv);
+  },
+});
 const viewer = new Viewer(document.getElementById("viewport")!);
 const groups = new Map<string, THREE.Group>();
 let selectedId: string | null = null;
@@ -1584,6 +1604,7 @@ for (const el of [latInput, lngInput, dateInput, gridInput]) {
  * 정북사선·채광사선·인동거리는 updateSetbackChecks()가 항상 최신 유지하므로 대상 아님.
  */
 function invalidateAnalysis(): void {
+  nearCache = null;
   const note = "배치가 변경되어 결과가 초기화되었습니다. 다시 실행하세요.";
   if (lastSunHours) {
     lastSunHours = null;
@@ -1870,7 +1891,7 @@ runSunHoursBtn.addEventListener("click", async () => {
   setStatus("일조권 검토 중… 0%");
   try {
     const t0 = performance.now();
-    const result = await runSunHoursCheck(project, (done, total) => {
+    const result = await runSunHoursCheck(analysisProject, (done, total) => {
       setStatus(`일조권 검토 중… ${Math.round((done / total) * 100)}%`);
     });
     lastSunHours = result;
@@ -1955,7 +1976,7 @@ runFacilityBtn.addEventListener("click", async () => {
   setStatus("교육·종교시설 일조 검토 중… 0%");
   try {
     const t0 = performance.now();
-    const r = await runFacilityCheck(project, (done, total) => {
+    const r = await runFacilityCheck(analysisProject, (done, total) => {
       setStatus(`교육·종교시설 일조 검토 중… ${Math.round((done / total) * 100)}%`);
     });
     lastFacility = r;
@@ -2057,7 +2078,7 @@ runWindBtn.addEventListener("click", async () => {
         reject(new Error(e.message));
       };
       w.postMessage({
-        buildings: project.buildings,
+        buildings: analysisBuildings(),
         site: project.site,
         windDirDeg: stats.prevailingDirDeg,
         gridM: WIND_GRID_M,
@@ -2186,11 +2207,11 @@ runLbmBtn.addEventListener("click", async () => {
     const windSpeed = Math.max(0.5, parseFloat(lbmSpeedInput.value) || 3.1);
     const gridM =
       lbmGridSelect.value === "auto"
-        ? chooseLbmGridM(project.buildings, project.site, windDir)
+        ? chooseLbmGridM(analysisBuildings(), project.site, windDir)
         : parseInt(lbmGridSelect.value, 10);
 
     const refH = Math.max(0, parseFloat(windRefHeightInput.value) || 0);
-    const domain = buildLbmDomain(project.buildings, project.site, windDir, gridM, refH);
+    const domain = buildLbmDomain(analysisBuildings(), project.site, windDir, gridM, refH);
     resetLbm();
     // 지형이 있으면 히트맵을 지형 표면에 드레이프 — 없으면 평지(y=0.2)
     lbmHeatmap = createLbmHeatmap(domain, terrainSampler());
@@ -2221,7 +2242,7 @@ runLbmBtn.addEventListener("click", async () => {
       worker.terminate();
       lbmWorker = null;
       runLbmBtn.textContent = "LBM 정밀 시뮬레이션";
-      const result = assembleLbmResult(domain, msg.ux, msg.uy, project.buildings, {
+      const result = assembleLbmResult(domain, msg.ux, msg.uy, analysisBuildings(), {
         windDirDeg: windDir,
         windDirSource: dirSource,
         windSpeedMs: windSpeed,
@@ -2319,7 +2340,7 @@ runSunMapBtn.addEventListener("click", async () => {
   try {
     const date = sunMapDateSelect.value as SunHoursDate;
     const t0 = performance.now();
-    const result = await runSunHoursMap(project, date, (done, total) => {
+    const result = await runSunHoursMap(analysisProject, date, (done, total) => {
       setStatus(`일조시간 분석 중… ${Math.round((done / total) * 100)}%`);
     });
     lastSunHoursMap = result;
@@ -2377,6 +2398,19 @@ function updateSiteTotals(): void {
   renderSiteTotals(project.buildings, project.site.siteAreaM2, project.analysis.gfaExtra);
 }
 
+const nearRadiusInput = document.getElementById("near-radius") as HTMLInputElement;
+nearRadiusInput.addEventListener("change", () => {
+  project.analysis.nearRadiusM = Math.max(0, parseFloat(nearRadiusInput.value) || 0);
+  invalidateAnalysis();
+  const adjAll = project.buildings.filter((b) => b.type === "인접건물").length;
+  const adjIn = analysisBuildings().filter((b) => b.type === "인접건물").length;
+  setStatus(
+    project.analysis.nearRadiusM > 0
+      ? `분석 반경 ${project.analysis.nearRadiusM}m — 주변 건물 ${adjAll}동 중 ${adjIn}동만 분석에 넣습니다`
+      : `분석 반경 없음 — 주변 건물 ${adjAll}동 모두 분석에 넣습니다`,
+  );
+  commitHistory();
+});
 const gfaRetailInput = document.getElementById("gfa-retail") as HTMLInputElement;
 const gfaAmenityInput = document.getElementById("gfa-amenity") as HTMLInputElement;
 /** 근생·부대 입력값 → project (용적률 표시·엑셀·보고서·자동 배분 공용) */
@@ -2546,6 +2580,8 @@ function applyProjectToInputs(): void {
   siteAreaInput.value = String(project.site.siteAreaM2);
   gfaRetailInput.value = String(project.analysis.gfaExtra?.retailM2 ?? 0);
   gfaAmenityInput.value = String(project.analysis.gfaExtra?.amenityPerUnit ?? 0);
+  nearRadiusInput.value = String(project.analysis.nearRadiusM ?? 0);
+  nearCache = null;
   fillSetbackInputs(project.analysis.setbackRules);
   sunHoursRuleSelect.value = project.analysis.sunHours.rule;
   sunHoursStepInput.value = String(project.analysis.sunHours.timeStep);
@@ -3586,7 +3622,7 @@ function mainBoardEntries(): BoardEntry[] {
 
 // ---------- 추가 분석 모듈 ----------
 const analysisCtx: AnalysisContext = {
-  project,
+  project: analysisProject,
   viewer,
   elevate: () => terrainSampler(),
   surface: () => (terrainVisible ? drapeSurface() : undefined),
