@@ -129,7 +129,7 @@ import { renderResultBoard } from "./resultboard";
 import { buildReportHtml, type ReportFigure } from "./report";
 import { makeSurface, type DrapeSurface } from "./drape";
 import { diagnoseDxfText, diagnosisHtml } from "./dxfdiag";
-import { findMaxFloors, planTypeOf, violations, type MaxFloorResult } from "./maxfloors";
+import { findMaxFloors, planTypeOfBuilding, violations, type MaxFloorResult } from "./maxfloors";
 import { defaultTentOptions, legalOptOf, planTentLegal, planTentRuleOnly, unitsPerFloorOf, type TentOptions, type TentResult } from "./tentplan";
 import { yieldToEventLoop } from "./pv";
 import { createUnitSunModule } from "./unitsun";
@@ -940,7 +940,7 @@ function planBuildingsByType(): Map<string, Building[]> {
   const m = new Map<string, Building[]>();
   for (const b of project.buildings) {
     if (b.type !== "계획주동") continue;
-    const t = planTypeOf(b.name);
+    const t = planTypeOfBuilding(b);
     const l = m.get(t);
     if (l) l.push(b);
     else m.set(t, [b]);

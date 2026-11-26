@@ -25,6 +25,7 @@ const RULES: [RegExp, string][] = [
   [/^ADJ_/, "인접건물 외곽선"],
   [/^BLDG_FLOORS$/, "층수 문자"],
   [/^BLDG_USE$/, "용도 문자 (유치원·학교·교회)"],
+  [/^BLDG_NAME$/, "동 이름 문자"],
   [/^UNIT_/, "세대 유니트 (평형별)"],
   [/^SITE_BOUNDARY$/, "대지경계"],
   [/^ROAD_CL$/, "도로중심선"],

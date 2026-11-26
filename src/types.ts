@@ -89,6 +89,11 @@ export interface Building {
   use?: FacilityUse;
   /** 교실(예배실) 층 범위 — 1부터, 양끝 포함. 없으면 전 층 */
   classFloors?: { from: number; to: number };
+  /**
+   * 계획주동 타입 — 층수 일괄 입력 등에서 같은 타입끼리 묶는다. 없으면 이름(계획주동_A_1 → A)에서.
+   * 세대 유니트+코어로 만든 동은 평형 구성(예: "59x2+84x2")이 타입이 된다.
+   */
+  planType?: string;
 }
 
 /** 일조 검토가 따로 필요한 시설 용도 */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { signedArea } from "./geom2d";
 import { letterSeq, parseDxfBuildings, parseFloorText } from "./dxf";
+import { planTypeOfBuilding } from "./maxfloors";
 
 /**
  * dxf.ts 파싱 검증 — 단위 자동감지($INSUNITS), 레이어 접미사 층수 파싱,
@@ -562,6 +563,30 @@ describe("세대 유니트 + 코어로 주동 만들기 (PLAN_ 외곽선 없이)
     ]);
     expect(a.windowSegments).toHaveLength(1);
     expect(r.warnings.some((w) => w.includes("계획주동 2동") && w.includes("코어 1개는 제외"))).toBe(true);
+    // 평형 구성이 타입·이름이 된다
+    expect(a.planType).toBe("59x1+84x1");
+    expect(a.name).toBe("계획주동_59x1+84x1_1");
+    expect(planTypeOfBuilding(a)).toBe("59x1+84x1");
+  });
+
+  it("BLDG_NAME 문자로 동 이름 지정 — 타입 묶음은 유지", () => {
+    const txt = (layer: string, x: number, y: number, t: string) =>
+      `0\nTEXT\n8\n${layer}\n10\n${x}\n20\n${y}\n30\n0\n40\n1000\n1\n${t}\n`;
+    const text = dxfText({
+      entities:
+        rectEntity("UNIT_84", 0, 0, 10000, 12000) +
+        rectEntity("PLAN_CORE", 10000, 0, 15000, 12000) +
+        rectEntity("PLAN_A_1", 50000, 0, 70000, 12000) +
+        txt("BLDG_NAME", 5000, 6000, "101동") +
+        txt("BLDG_NAME", 60000, 6000, "102동"),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    const names = r.buildings.map((b) => b.name).sort();
+    expect(names).toEqual(["101동", "102동"]);
+    const b101 = r.buildings.find((b) => b.name === "101동")!;
+    const b102 = r.buildings.find((b) => b.name === "102동")!;
+    expect(planTypeOfBuilding(b101)).toBe("84x1");
+    expect(planTypeOfBuilding(b102)).toBe("A");
   });
 
   it("PLAN_ 외곽선 안의 유니트·코어는 기존대로 세대 구성에만 쓰인다", () => {

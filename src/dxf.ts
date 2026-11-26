@@ -80,6 +80,8 @@ export function parseFloorText(raw: string): number | null {
 
 /** 시설 용도 문자 전용 레이어 — 건물 외곽선 안에 "유치원"·"초등학교"·"교회"로 적는다 */
 export const LAYER_USE_TEXT = "BLDG_USE";
+/** 동 이름 문자 — 건물 외곽선 안에 "101동"처럼 적으면 그 이름으로 불러온다 */
+export const LAYER_NAME_TEXT = "BLDG_NAME";
 
 /** 용도 문자 해석 — 한글·영문 모두. 그 외는 null */
 export function parseUseText(raw: string): FacilityUse | null {
@@ -133,6 +135,8 @@ interface RawPolyline {
   layer: string;
   vertices: Point2[];
   closed: boolean;
+  /** 세대 유니트+코어로 만든 동의 평형 구성 타입 (예: "59x2+84x2") */
+  planType?: string;
 }
 
 export interface BuildingLayerMatch {
@@ -324,6 +328,8 @@ export function parseDxfBuildings(
   const floorTexts: { x: number; y: number; floors: number; layer: string }[] = [];
   /** 시설 용도 문자 (BLDG_USE) */
   const useTexts: { x: number; y: number; use: FacilityUse }[] = [];
+  /** 동 이름 문자 (BLDG_NAME) */
+  const nameTexts: { x: number; y: number; name: string }[] = [];
   /** 도면 단위가 mm인데 고도를 m로 적은 등고선 수 — 알림용 */
   const contourStats = { meterZ: 0, lines: 0 };
 
@@ -348,6 +354,14 @@ export function parseDxfBuildings(
           noteSkipped++;
           continue;
         }
+      }
+      if (textLayer === LAYER_NAME_TEXT) {
+        const raw = String(entity.text ?? "").replace(/\\P/g, " ").replace(/[{}]|\\[A-Za-z][^;]*;/g, "").trim();
+        if (raw && anchor) {
+          const ez: number = entity.extrusionDirectionZ ?? entity.extrusionDirection?.z ?? 1;
+          nameTexts.push({ x: anchor.x * (ez < 0 ? -1 : 1) * unitScale, y: anchor.y * unitScale, name: raw });
+        }
+        continue;
       }
       if (textLayer === LAYER_USE_TEXT) {
         const use = parseUseText(String(entity.text ?? ""));
@@ -569,7 +583,13 @@ export function parseDxfBuildings(
     const floors = m.floors ?? (isPlan ? DEFAULT_FLOORS_PLAN : DEFAULT_FLOORS_ADJ);
     const unitsPerFloor = isPlan ? 4 : 0;
     let name: string;
-    if (m.typeTag !== null) {
+    if (pl.planType) {
+      // 세대 유니트+코어로 만든 동 — 평형 구성을 타입으로: 계획주동_59x2+84x2_1
+      const base = `${type}_${pl.planType}`;
+      const n = (nameCount.get(base) ?? 0) + 1;
+      nameCount.set(base, n);
+      name = `${base}_${n}`;
+    } else if (m.typeTag !== null) {
       // 권장 규약: PLAN_A_1 → "계획주동_A_1" (라이브러리·목록에서 타입·번호로 바로 식별)
       const base = `${type}_${m.typeTag}_${m.typeNum}`;
       const n = (nameCount.get(base) ?? 0) + 1;
@@ -612,6 +632,7 @@ export function parseDxfBuildings(
       mirroredH: false,
       mirroredV: false,
       windowSegments: [],
+      ...(pl.planType ? { planType: pl.planType } : {}),
     });
   }
 
@@ -686,6 +707,7 @@ export function parseDxfBuildings(
   const floorsFromText = applyFloorTexts(buildings, sourceLayers, floorTexts, warnings);
   const unitsFromDrawing = applyUnitPolygons(buildings, unitPolys, warnings);
   const usesFromText = applyUseTexts(buildings, useTexts, warnings);
+  applyNameTexts(buildings, nameTexts, warnings);
 
   return {
     buildings, overlays, contourPoints, warnings, unitScale, unitSource, floorsFromText, unitsFromDrawing,
@@ -709,8 +731,8 @@ function assembleUnitCoreBuildings(
     const c = polygonCentroid(pts);
     return !outlines.some((o) => pointInPolygon(c.x, c.y, o));
   };
-  const pieces: { pts: Point2[]; unit: boolean }[] = [
-    ...units.filter((u) => free(u.points)).map((u) => ({ pts: u.points, unit: true })),
+  const pieces: { pts: Point2[]; unit: boolean; type?: string }[] = [
+    ...units.filter((u) => free(u.points)).map((u) => ({ pts: u.points, unit: true, type: u.unitType.replace("㎡", "") })),
     ...cores.filter(free).map((pts) => ({ pts, unit: false })),
   ];
   if (!pieces.some((p) => p.unit)) {
@@ -722,17 +744,52 @@ function assembleUnitCoreBuildings(
   const out: RawPolyline[] = [];
   let coreOnly = 0;
   result.polygons.forEach((poly, i) => {
-    if (!result.sources[i].some((k) => pieces[k].unit)) {
+    const us = result.sources[i].filter((k) => pieces[k].unit);
+    if (!us.length) {
       coreOnly++;
       return;
     }
-    out.push({ layer: LAYER_PLAN_PREFIX, vertices: poly, closed: true });
+    // 평형 구성 → 타입 문자열 (작은 평형부터): 59x2+84x2
+    const cnt = new Map<string, number>();
+    for (const k of us) cnt.set(pieces[k].type!, (cnt.get(pieces[k].type!) ?? 0) + 1);
+    const planType = [...cnt]
+      .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))
+      .map(([t, c]) => `${t}x${c}`)
+      .join("+");
+    out.push({ layer: LAYER_PLAN_PREFIX, vertices: poly, closed: true, planType });
   });
   warnings.push(
     `세대 유니트(UNIT_)·코어(${LAYER_CORE}) ${pieces.length}개를 벽 공유로 묶어 계획주동 ${out.length}동을 만들었습니다` +
       (coreOnly ? ` — 유니트와 맞닿지 않은 코어 ${coreOnly}개는 제외` : ""),
   );
   return out;
+}
+
+/** 건물 외곽선 안의 BLDG_NAME 문자로 동 이름을 정한다 (타입은 planType으로 유지) */
+function applyNameTexts(
+  buildings: Building[],
+  texts: { x: number; y: number; name: string }[],
+  warnings: string[],
+): void {
+  if (!texts.length) return;
+  let orphan = 0;
+  const used = new Set<string>();
+  for (const t of texts) {
+    const b = buildings.find((x) => pointInPolygon(t.x, t.y, x.footprint));
+    if (!b) { orphan++; continue; }
+    if (b.type === "계획주동" && !b.planType) {
+      // 이름이 바뀌어도 층수 일괄 입력의 타입 묶음은 원래 이름(계획주동_A_1 → A)에서 유지
+      const m = b.name.match(/_([A-Za-z0-9]+)_\d+(?:-\d+)?$/);
+      if (m) b.planType = m[1].toUpperCase();
+    }
+    let name = t.name;
+    for (let k = 2; used.has(name); k++) name = `${t.name}-${k}`;
+    used.add(name);
+    b.name = name;
+  }
+  if (orphan) {
+    warnings.push(`${LAYER_NAME_TEXT} 동 이름 문자 ${orphan}개가 어떤 건물 외곽선 안에도 있지 않아 무시했습니다`);
+  }
 }
 
 /** 밑줄(_)로 시작하는 레이어의 닫힌 폴리라인 = 범례 틀 → 도면 좌표(m) 경계 상자 */
