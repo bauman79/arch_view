@@ -128,7 +128,7 @@ import {
 import { renderResultBoard } from "./resultboard";
 import { buildReportHtml, type ReportFigure } from "./report";
 import { makeSurface, type DrapeSurface } from "./drape";
-import { diagnoseDxfText, diagnosisHtml } from "./dxfdiag";
+import { diagnoseDxfText, diagnosisHtml, esc } from "./dxfdiag";
 import { findMaxFloors, planTypeOfBuilding, violations, type MaxFloorResult } from "./maxfloors";
 import { defaultTentOptions, legalOptOf, planTentLegal, planTentRuleOnly, unitsPerFloorOf, type TentOptions, type TentResult } from "./tentplan";
 import { yieldToEventLoop } from "./pv";
@@ -838,7 +838,7 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
   const unitMode = (document.getElementById("unit-select") as HTMLSelectElement)
     .value as UnitMode;
   try {
-    const { buildings, overlays, contourPoints, warnings, unitSource, floorsFromText, unitsFromDrawing } = parseDxfBuildings(
+    const { buildings, overlays, contourPoints, warnings, unitSource, floorsFromText, unitsFromDrawing, issues } = parseDxfBuildings(
       text,
       unitMode,
     );
@@ -869,6 +869,17 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
     project.buildingLibrary.push(...planBuildings);
     const placedPlans = planBuildings.map((lib) => cloneBuildingFromLibrary(lib, 0));
     project.buildings.push(...placedPlans, ...adjBuildings);
+    // 확인 필요 항목 — 라이브러리 원본 → 배치된 복제본, 도면 좌표 → 장면 좌표
+    {
+      const placedOf = new Map(planBuildings.map((b, i) => [b, placedPlans[i]] as const));
+      const o = sceneOrigin ?? { x: 0, y: 0 };
+      lastIssues = issues.map((it) => ({
+        kind: it.kind,
+        message: it.message,
+        id: it.building ? (placedOf.get(it.building) ?? it.building).id : undefined,
+        p: it.point ? { x: it.point.x - o.x, y: it.point.y - o.y } : undefined,
+      }));
+    }
 
     // 대지면적이 비어 있으면 대지경계로 채운다 — 사용자가 직접 넣은 값은 덮어쓰지 않는다
     let autoSiteArea = 0;
@@ -903,6 +914,7 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
       msg += `, 지형 로드됨 (고도 범위: ${terrainModel.minZ.toFixed(1)}m ~ ${terrainModel.maxZ.toFixed(1)}m)`;
     }
     if (warnings.length > 0) msg += ` (알림 ${warnings.length}건 — "자세히")`;
+    if (lastIssues.length > 0) msg += ` · 확인 필요 ${lastIssues.length}건 (도면 진단표에서 눌러 위치로 이동)`;
     // 진단표 — 레이어 인식 현황 (기본 설정 > 도면 진단표)
     const diag = diagnoseDxfText(text);
     const winOf = (t: string) => buildings.filter((b) => b.type === t).reduce((a, b) => a + b.windowSegments.length, 0);
@@ -917,6 +929,7 @@ function loadDxfText(text: string, sourceName: string, merge: boolean): void {
       contourPoints: contourPoints.length,
       warnings,
     });
+    lastDiagHtml += issuesHtml();
     lastDxfName = sourceName;
     const unknown = diag.layers.filter((l) => l.category.startsWith("미인식")).length;
     if (unknown > 0) msg += ` · 미인식 레이어 ${unknown}개 (도면 진단표 참고)`;
@@ -1396,6 +1409,46 @@ document.getElementById("export-report")!.addEventListener("click", async () => 
 
 // ---------- 도면 진단표 ----------
 let lastDiagHtml: string | null = null;
+/** DXF 확인 필요 항목 (장면 좌표) */
+let lastIssues: { kind: string; message: string; id?: string; p?: Point2 }[] = [];
+
+/** 확인 필요 항목 목록 — 종류별로 묶고, 누르면 그 건물·지점으로 이동 */
+function issuesHtml(): string {
+  if (!lastIssues.length) return "";
+  const byKind = new Map<string, number[]>();
+  lastIssues.forEach((it, i) => {
+    const l = byKind.get(it.kind);
+    if (l) l.push(i); else byKind.set(it.kind, [i]);
+  });
+  const MAX = 100;
+  let html = `<h4 style="margin:12px 0 4px">확인 필요 항목 ${lastIssues.length}건 — 누르면 위치로 이동, 건물은 선택되어 오른쪽 상세에서 바로 수정</h4>`;
+  for (const [kind, idx] of byKind) {
+    html += `<details${byKind.size <= 3 ? " open" : ""}><summary>${esc(kind)} ${idx.length}건</summary><ul class="diag-issues">` +
+      idx.slice(0, MAX).map((i) =>
+        `<li><button class="btn mini" data-issue="${i}" type="button">이동</button> ${esc(lastIssues[i].message)}</li>`,
+      ).join("") +
+      (idx.length > MAX ? `<li class="hint">… 외 ${idx.length - MAX}건</li>` : "") +
+      `</ul></details>`;
+  }
+  return html;
+}
+
+document.getElementById("diag-body")!.addEventListener("click", (ev) => {
+  const btn = (ev.target as HTMLElement).closest<HTMLElement>("[data-issue]");
+  if (!btn) return;
+  const it = lastIssues[Number(btn.dataset.issue)];
+  if (!it) return;
+  (document.getElementById("diag-modal") as HTMLElement).hidden = true;
+  if (it.id && project.buildings.some((b) => b.id === it.id)) {
+    selectBuilding(it.id);
+    const c = buildingCenterById(it.id);
+    if (c) flyToPoint(c, 70);
+    setStatus(`${it.message} — 선택됨: 오른쪽 상세 패널에서 층수·용도 등을 고치세요`);
+  } else if (it.p) {
+    flyToPoint(new THREE.Vector3(it.p.x, 0, -it.p.y), 60);
+    setStatus(`${it.message} — 이 위치를 CAD에서 확인하세요`);
+  }
+});
 document.getElementById("dxf-diag-btn")!.addEventListener("click", () => {
   const modal = document.getElementById("diag-modal") as HTMLElement;
   (document.getElementById("diag-body") as HTMLElement).innerHTML =

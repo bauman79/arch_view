@@ -129,6 +129,16 @@ export interface DxfLoadResult {
   unitsFromDrawing: number;
   /** 배율을 어떻게 정했는지 — 상태 표시용 */
   unitSource: UnitSource;
+  /** 위치가 있는 확인 필요 항목 — 진단표에서 눌러 그 건물·지점으로 이동 */
+  issues: DxfIssue[];
+}
+
+/** 불러오기 확인 필요 항목 — building(해당 건물) 또는 point(도면 좌표 m, 원점 이동 전) */
+export interface DxfIssue {
+  kind: "층수 충돌" | "층수 문자 밖" | "창선 벽 밖" | "유니트 주동 밖" | "동 이름 밖" | "형상 다름" | "층수 없음";
+  message: string;
+  building?: Building;
+  point?: Point2;
 }
 
 interface RawPolyline {
@@ -328,6 +338,7 @@ export function parseDxfBuildings(
   const floorTexts: { x: number; y: number; floors: number; layer: string }[] = [];
   /** 시설 용도 문자 (BLDG_USE) */
   const useTexts: { x: number; y: number; use: FacilityUse }[] = [];
+  const issues: DxfIssue[] = [];
   /** 동 이름 문자 (BLDG_NAME) */
   const nameTexts: { x: number; y: number; name: string }[] = [];
   /** 도면 단위가 mm인데 고도를 m로 적은 등고선 수 — 알림용 */
@@ -639,6 +650,7 @@ export function parseDxfBuildings(
   // 한 타입 레이어에 형상이 여러 종이면 안내 — 판정은 동별 실제 기하로 하므로 계산에는
   // 영향이 없지만, 목록에서 이름(…-5, …-6)만으로는 어느 동이 다른 형상인지 알 수 없어
   // "같은 타입을 복사·미러한 것"으로 오인하기 쉽다.
+  const shapeOddNames = new Set<string>();
   for (const [layer, list] of shapesByTypeLayer) {
     const groups = new Map<string, { names: string[]; area: number }>();
     for (const s of list) {
@@ -647,6 +659,10 @@ export function parseDxfBuildings(
       groups.set(s.sig, g);
     }
     if (groups.size <= 1) continue;
+    {
+      const sorted = [...groups.values()].sort((x, y) => y.names.length - x.names.length);
+      for (const g of sorted.slice(1)) for (const n of g.names) shapeOddNames.add(n);
+    }
     const desc = [...groups.values()]
       .sort((a, b) => b.names.length - a.names.length)
       .map((g) => {
@@ -686,7 +702,14 @@ export function parseDxfBuildings(
         }
         if (matched) break;
       }
-      if (!matched) unmatchedWin++;
+      if (!matched) {
+        unmatchedWin++;
+        issues.push({
+          kind: "창선 벽 밖",
+          message: `${isPlan ? LAYER_PLAN_WIN : LAYER_ADJ_WIN} 창선이 건물 벽 위에 있지 않음`,
+          point: { x: (wa.x + wb.x) / 2, y: (wa.y + wb.y) / 2 },
+        });
+      }
     }
   };
   matchWinLayer(planWinSegments, true);
@@ -704,13 +727,19 @@ export function parseDxfBuildings(
         `(도면은 mm 단위 — 예: 50 → 50m). 의도와 다르면 고도값을 mm(50000)로 맞춰 주세요.`,
     );
   }
-  const floorsFromText = applyFloorTexts(buildings, sourceLayers, floorTexts, warnings);
-  const unitsFromDrawing = applyUnitPolygons(buildings, unitPolys, warnings);
+  const floorsFromText = applyFloorTexts(buildings, sourceLayers, floorTexts, warnings, issues);
+  const unitsFromDrawing = applyUnitPolygons(buildings, unitPolys, warnings, issues);
+  // 형상이 다른 계획주동(소수 쪽) — 이름으로 건물을 찾아 이동할 수 있게
+  for (const b of buildings) {
+    if (shapeOddNames.has(b.name)) {
+      issues.push({ kind: "형상 다름", message: `${b.name} — 같은 타입 레이어의 다른 동과 형상이 다름`, building: b });
+    }
+  }
   const usesFromText = applyUseTexts(buildings, useTexts, warnings);
-  applyNameTexts(buildings, nameTexts, warnings);
+  applyNameTexts(buildings, nameTexts, warnings, issues);
 
   return {
-    buildings, overlays, contourPoints, warnings, unitScale, unitSource, floorsFromText, unitsFromDrawing,
+    buildings, overlays, contourPoints, warnings, unitScale, unitSource, floorsFromText, unitsFromDrawing, issues,
     usesFromText,
   };
 }
@@ -770,13 +799,18 @@ function applyNameTexts(
   buildings: Building[],
   texts: { x: number; y: number; name: string }[],
   warnings: string[],
+  issues: DxfIssue[] = [],
 ): void {
   if (!texts.length) return;
   let orphan = 0;
   const used = new Set<string>();
   for (const t of texts) {
     const b = buildings.find((x) => pointInPolygon(t.x, t.y, x.footprint));
-    if (!b) { orphan++; continue; }
+    if (!b) {
+      orphan++;
+      issues.push({ kind: "동 이름 밖", message: `동 이름 "${t.name}"이 건물 외곽선 밖에 있음`, point: { x: t.x, y: t.y } });
+      continue;
+    }
     if (b.type === "계획주동" && !b.planType) {
       // 이름이 바뀌어도 층수 일괄 입력의 타입 묶음은 원래 이름(계획주동_A_1 → A)에서 유지
       const m = b.name.match(/_([A-Za-z0-9]+)_\d+(?:-\d+)?$/);
@@ -906,8 +940,17 @@ function applyFloorTexts(
   sourceLayers: string[],
   texts: { x: number; y: number; floors: number; layer: string }[],
   warnings: string[],
+  issues: DxfIssue[] = [],
 ): number {
-  if (texts.length === 0) return 0;
+  // 층수 정보가 전혀 없는 주변 건물 (레이어 접미사도 문자도 없음) — 1층으로 들어간다
+  const noFloors = (b: Building, i: number) =>
+    b.type === "인접건물" && matchBuildingLayer(sourceLayers[i])?.floors == null;
+  if (texts.length === 0) {
+    buildings.forEach((b, i) => {
+      if (noFloors(b, i)) issues.push({ kind: "층수 없음", message: `${b.name} — 층수 정보 없음(1층으로 들어옴)`, building: b });
+    });
+    return 0;
+  }
   let applied = 0;
   const conflicts: string[] = [];
   const used = new Set<number>();
@@ -923,11 +966,17 @@ function applyFloorTexts(
       hits.push(t.floors);
       used.add(k);
     });
-    if (hits.length === 0) return;
+    if (hits.length === 0) {
+      if (noFloors(b, i)) issues.push({ kind: "층수 없음", message: `${b.name} — 층수 정보 없음(1층으로 들어옴)`, building: b });
+      return;
+    }
     const distinct = [...new Set(hits)];
     b.floors = Math.max(...distinct);
     applied++;
-    if (distinct.length > 1) conflicts.push(`${b.name}(${distinct.join("/")}층 → ${b.floors}층)`);
+    if (distinct.length > 1) {
+      conflicts.push(`${b.name}(${distinct.join("/")}층 → ${b.floors}층)`);
+      issues.push({ kind: "층수 충돌", message: `${b.name} — 층수 문자 ${distinct.join("/")}층, ${b.floors}층으로 씀`, building: b });
+    }
   });
   if (conflicts.length > 0) {
     warnings.push(
@@ -935,6 +984,11 @@ function applyFloorTexts(
         conflicts.slice(0, 8).join(", ") + (conflicts.length > 8 ? " …" : ""),
     );
   }
+  texts.forEach((t, k) => {
+    if (t.layer === LAYER_FLOOR_TEXT && !used.has(k)) {
+      issues.push({ kind: "층수 문자 밖", message: `층수 문자 "${t.floors}"가 건물 외곽선 밖에 있음`, point: { x: t.x, y: t.y } });
+    }
+  });
   const orphan = texts.filter((t, k) => t.layer === LAYER_FLOOR_TEXT && !used.has(k)).length;
   if (orphan > 0) {
     warnings.push(
@@ -969,6 +1023,7 @@ function applyUnitPolygons(
   buildings: Building[],
   units: { unitType: string; points: Point2[] }[],
   warnings: string[],
+  issues: DxfIssue[] = [],
 ): number {
   if (units.length === 0) return 0;
   const plans = buildings.filter((b) => b.type === "계획주동");
@@ -980,7 +1035,11 @@ function applyUnitPolygons(
       pointInPolygon(c.x, c.y, b.footprint) ||
       u.points.filter((p) => pointInPolygon(p.x, p.y, b.footprint)).length > u.points.length / 2;
     const host = plans.find(inside);
-    if (!host) { orphan++; continue; }
+    if (!host) {
+      orphan++;
+      issues.push({ kind: "유니트 주동 밖", message: `UNIT_${u.unitType.replace("㎡", "")} 유니트가 어느 주동에도 속하지 않음`, point: c });
+      continue;
+    }
     const m = counts.get(host) ?? new Map<string, number>();
     m.set(u.unitType, (m.get(u.unitType) ?? 0) + 1);
     counts.set(host, m);

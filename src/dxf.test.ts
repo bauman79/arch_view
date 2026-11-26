@@ -602,3 +602,24 @@ describe("세대 유니트 + 코어로 주동 만들기 (PLAN_ 외곽선 없이)
     expect(r.buildings[0].unitMix).toEqual([{ unitType: "84㎡", countPerFloor: 1 }]);
   });
 });
+
+describe("확인 필요 항목 (issues)", () => {
+  it("층수 충돌·밖 문자·벽 밖 창선은 위치와 함께 issues로", () => {
+    const txt = (layer: string, x: number, y: number, t: string) =>
+      `0\nTEXT\n8\n${layer}\n10\n${x}\n20\n${y}\n30\n0\n40\n1000\n1\n${t}\n`;
+    const text = dxfText({
+      entities:
+        rectEntity("ADJ_BLDG", 0, 0, 10000, 10000) +
+        txt("BLDG_FLOORS", 3000, 3000, "4") +
+        txt("BLDG_FLOORS", 6000, 6000, "3") +
+        txt("BLDG_FLOORS", 50000, 50000, "7") +
+        lineEntity("ADJ_WIN", 20000, 0, 21000, 0) +
+        rectEntity("ADJ_BLDG", 30000, 0, 40000, 10000), // 층수 없음
+    });
+    const r = parseDxfBuildings(text, "mm");
+    const kinds = r.issues.map((i) => i.kind).sort();
+    expect(kinds).toEqual(["창선 벽 밖", "층수 문자 밖", "층수 없음", "층수 충돌"]);
+    expect(r.issues.find((i) => i.kind === "층수 문자 밖")!.point).toEqual({ x: 50, y: 50 });
+    expect(r.issues.find((i) => i.kind === "층수 충돌")!.building!.floors).toBe(4);
+  });
+});
