@@ -138,6 +138,59 @@ export function siteUnitTotals(buildings: Building[]): SiteUnitTotals {
   };
 }
 
+/** 계획주동 이름 "계획주동_A_1" → 타입 "A" */
+export function planTypeOf(name: string): string {
+  const m = name.match(/_([A-Za-z0-9]+)_\d+(?:-\d+)?$/);
+  return m ? m[1].toUpperCase() : "기타";
+}
+
+/** 동의 타입 — 지정된 planType 우선, 없으면 이름에서 */
+export function planTypeOfBuilding(b: { name: string; planType?: string }): string {
+  return b.planType ?? planTypeOf(b.name);
+}
+
+export interface UnitBand {
+  label: string;
+  count: number;
+  /** 전체 세대 대비 % */
+  pct: number;
+}
+
+/**
+ * 전용면적 규모별 세대 비율 — 60㎡ 이하(소형) / 60~85㎡ / 85㎡ 초과(국민주택규모 초과).
+ * 평형 이름에서 숫자를 못 읽으면 "규모 미상".
+ */
+export function unitSizeBands(t: SiteUnitTotals): UnitBand[] {
+  const bands = [
+    { label: "60㎡ 이하", count: 0 },
+    { label: "60㎡ 초과 85㎡ 이하", count: 0 },
+    { label: "85㎡ 초과", count: 0 },
+    { label: "규모 미상", count: 0 },
+  ];
+  for (const u of t.byType) {
+    const n = parseFloat(u.unitType);
+    const k = Number.isNaN(n) ? 3 : n <= 60 ? 0 : n <= 85 ? 1 : 2;
+    bands[k].count += u.count;
+  }
+  return bands
+    .filter((b, i) => i < 3 || b.count > 0)
+    .map((b) => ({ ...b, pct: t.total > 0 ? (b.count / t.total) * 100 : 0 }));
+}
+
+/** 동 타입별 동수·세대수 (타입 이름순) */
+export function planTypeTotals(buildings: Building[]): { type: string; dongs: number; units: number }[] {
+  const m = new Map<string, { dongs: number; units: number }>();
+  for (const b of buildings) {
+    if (b.type !== "계획주동") continue;
+    const k = planTypeOfBuilding(b);
+    const e = m.get(k) ?? { dongs: 0, units: 0 };
+    e.dongs++;
+    e.units += b.unitsPerFloor > 0 ? totalUnits(b) : 0;
+    m.set(k, e);
+  }
+  return [...m].sort(([a], [b]) => a.localeCompare(b)).map(([type, e]) => ({ type, ...e }));
+}
+
 // ---------- 면적·건폐율·용적률 ----------
 
 /** offset 회전·이동은 면적을 바꾸지 않으므로 원본 footprint로 계산 */

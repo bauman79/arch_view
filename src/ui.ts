@@ -7,6 +7,8 @@ import {
   totalUnits,
   unitBreakdown,
   unitSummaryText,
+  planTypeTotals,
+  unitSizeBands,
   type SiteUnitTotals,
 } from "./massing";
 import type { NorthSetbackResult } from "./northsetback";
@@ -858,7 +860,7 @@ export function renderSiteTotals(
         (s.farPct !== null ? ` · 용적률 ${s.farPct.toFixed(1)}%` : "");
     }
   }
-  renderUnitSummary(t, s, siteAreaM2);
+  renderUnitSummary(t, s, siteAreaM2, buildings);
   const bcrEl = document.getElementById("bcr-far");
   if (bcrEl) {
     bcrEl.textContent =
@@ -879,6 +881,7 @@ function renderUnitSummary(
   t: SiteUnitTotals,
   cov: ReturnType<typeof coverageStats>,
   siteAreaM2: number,
+  buildings: Building[] = [],
 ): void {
   const host = document.getElementById("unit-summary-body");
   if (!host) return;
@@ -945,6 +948,34 @@ function renderUnitSummary(
   pctCell.className = "num";
   pctCell.textContent = "100%";
   host.appendChild(table);
+
+  // 규모별 비율 — 소형(60㎡ 이하)·국민주택규모(85㎡ 이하) 확인용
+  const bands = document.createElement("div");
+  bands.className = "unit-far";
+  bands.textContent = "규모별: " + unitSizeBands(t).map((b) => `${b.label} ${b.count}세대(${b.pct.toFixed(1)}%)`).join(" · ");
+  host.appendChild(bands);
+
+  // 동 타입별 — 2종 이상일 때만
+  const types = planTypeTotals(buildings);
+  if (types.length > 1) {
+    const tt = document.createElement("table");
+    tt.className = "unit-table";
+    const h = tt.createTHead().insertRow();
+    for (const [text, cls] of [["동 타입", ""], ["동수", "num"], ["세대수", "num"]] as const) {
+      const th = document.createElement("th");
+      th.textContent = text;
+      if (cls) th.className = cls;
+      h.appendChild(th);
+    }
+    const tb = tt.createTBody();
+    for (const r of types) {
+      const tr = tb.insertRow();
+      tr.insertCell().textContent = r.type;
+      const d = tr.insertCell(); d.className = "num"; d.textContent = String(r.dongs);
+      const u = tr.insertCell(); u.className = "num"; u.textContent = String(r.units);
+    }
+    host.appendChild(tt);
+  }
 }
 
 /** 평형별 층당세대수 합이 바뀌어 unitsPerFloor가 파생 갱신됐을 때 카드의 '층당세대' 입력값만 갱신 */

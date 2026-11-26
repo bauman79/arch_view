@@ -6,8 +6,10 @@ import {
   footprintAreaM2,
   grossFloorAreaM2,
   MASS_TYPE_LABEL,
+  planTypeTotals,
   siteUnitTotals,
   unitBreakdown,
+  unitSizeBands,
 } from "./massing";
 import type { PvResult } from "./pv";
 import type { PvEnergyResult } from "./pvenergy";
@@ -153,10 +155,19 @@ export function buildOverviewRows(project: Project): Cell[][] {
 
   // 세대수 집계 — 전체 합계 + 타입별 세대수
   rows.push([]);
-  rows.push(["세대수 집계", "세대수"]);
-  rows.push(["전체 세대수", totals.total]);
+  rows.push(["세대수 집계", "세대수", "비율(%)"]);
+  rows.push(["전체 세대수", totals.total, 100]);
   for (const u of totals.byType) {
-    rows.push([u.unitType, u.count]);
+    rows.push([u.unitType, u.count, totals.total > 0 ? round((u.count / totals.total) * 100, 1) : null]);
+  }
+  rows.push([]);
+  rows.push(["규모별", "세대수", "비율(%)"]);
+  for (const b of unitSizeBands(totals)) rows.push([b.label, b.count, round(b.pct, 1)]);
+  const types = planTypeTotals(buildings);
+  if (types.length > 0) {
+    rows.push([]);
+    rows.push(["동 타입별", "동수", "세대수"]);
+    for (const r of types) rows.push([r.type, r.dongs, r.units]);
   }
 
   rows.push([]);

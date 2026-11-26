@@ -58,6 +58,7 @@ import {
   templateFootprint,
   totalUnits,
   unitBreakdown,
+  unitSizeBands,
 } from "./massing";
 import { createSpacingOverlay, runSpacingCheck, type SpacingResult } from "./spacing";
 import { formatMinutes, localDate, sunPosition } from "./sun";
@@ -1390,6 +1391,8 @@ document.getElementById("export-report")!.addEventListener("click", async () => 
       ["기준일", project.analysis.date],
       ["위치", `위도 ${project.site.latitude.toFixed(4)} · 경도 ${project.site.longitude.toFixed(4)}`],
       ["계획주동", `${t.buildingCount}동 · ${t.total.toLocaleString()}세대`],
+      ["평형 구성", t.byType.length ? t.byType.map((u) => `${u.unitType} ${u.count}`).join(" · ") : "—"],
+      ["규모별", unitSizeBands(t).map((b) => `${b.label} ${b.pct.toFixed(1)}%`).join(" · ")],
       ["연면적", `${Math.round(cov.grossM2).toLocaleString()}㎡`],
       ["대지면적", project.site.siteAreaM2 > 0 ? `${project.site.siteAreaM2.toLocaleString()}㎡` : "미입력"],
       ["건폐율 · 용적률", cov.bcrPct === null ? "대지면적 미입력" : `${cov.bcrPct.toFixed(1)}% · ${cov.farPct?.toFixed(1)}%`],

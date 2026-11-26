@@ -29,16 +29,7 @@ export interface MaxFloorResult {
   fixedViolations: number;
 }
 
-/** 계획주동 이름 "계획주동_A_1" → 타입 "A" */
-export function planTypeOf(name: string): string {
-  const m = name.match(/_([A-Za-z0-9]+)_\d+(?:-\d+)?$/);
-  return m ? m[1].toUpperCase() : "기타";
-}
-
-/** 동의 타입 — 지정된 planType 우선, 없으면 이름에서 */
-export function planTypeOfBuilding(b: { name: string; planType?: string }): string {
-  return b.planType ?? planTypeOf(b.name);
-}
+export { planTypeOf, planTypeOfBuilding } from "./massing";
 
 const NEAR_M = 150;
 

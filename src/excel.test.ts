@@ -146,10 +146,14 @@ describe("엑셀 내보내기 round-trip", () => {
     );
     const head = rows.findIndex((r) => r[0] === "세대수 집계");
     expect(head).toBeGreaterThan(0);
-    expect(rows[head + 1]).toEqual(["전체 세대수", 36]);
-    expect(rows[head + 2]).toEqual(["59㎡", 18]);
-    expect(rows[head + 3]).toEqual(["84㎡", 9]);
-    expect(rows[head + 4]).toEqual(["101㎡", 9]);
+    expect(rows[head + 1]).toEqual(["전체 세대수", 36, 100]);
+    expect(rows[head + 2]).toEqual(["59㎡", 18, 50]);
+    expect(rows[head + 3]).toEqual(["84㎡", 9, 25]);
+    expect(rows[head + 4]).toEqual(["101㎡", 9, 25]);
+    const band = rows.findIndex((r) => r[0] === "규모별");
+    expect(rows[band + 1]).toEqual(["60㎡ 이하", 18, 50]);
+    expect(rows[band + 2]).toEqual(["60㎡ 초과 85㎡ 이하", 9, 25]);
+    expect(rows[band + 3]).toEqual(["85㎡ 초과", 9, 25]);
   });
 
   it("층수 변경 시 총 세대수가 자동 재계산된다 (버그 수정 검증)", () => {
@@ -192,10 +196,10 @@ describe("엑셀 내보내기 round-trip", () => {
     // 타입별 집계: 59㎡ = 18(판상형) + 30(custom) = 48, 84㎡ = 9 + 30 = 39
     const rows = XLSX.utils.sheet_to_json<(string | number)[]>(ws, { header: 1 });
     const head = rows.findIndex((r) => r[0] === "세대수 집계");
-    expect(rows[head + 1]).toEqual(["전체 세대수", 96]);
-    expect(rows[head + 2]).toEqual(["59㎡", 48]);
-    expect(rows[head + 3]).toEqual(["84㎡", 39]);
-    expect(rows[head + 4]).toEqual(["101㎡", 9]);
+    expect(rows[head + 1]).toEqual(["전체 세대수", 96, 100]);
+    expect(rows[head + 2].slice(0, 2)).toEqual(["59㎡", 48]);
+    expect(rows[head + 3].slice(0, 2)).toEqual(["84㎡", 39]);
+    expect(rows[head + 4].slice(0, 2)).toEqual(["101㎡", 9]);
   });
 
   it("인접건물은 배치 개요에서 제외된다", () => {
