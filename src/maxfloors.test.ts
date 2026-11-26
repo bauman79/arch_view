@@ -26,6 +26,7 @@ describe("법규 최대 층수", () => {
       windowSegments: [[{ x: 5, y: 42 }, { x: 25, y: 42 }]],
     });
     const p = mkProject([a, b]);
+    p.analysis.setbackRules.spacingNaEnabled = false; // 남북 배치는 나목 대상 — 가목으로 제한 확인
     const r = await findMaxFloors(p, ["A", "B"], 60);
     for (const x of r) {
       expect(x.limit).toBe("인동거리");

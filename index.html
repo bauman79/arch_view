@@ -2092,7 +2092,11 @@
                   <input type="number" id="north-low-m" value="1.5" step="0.1" min="0" max="10" />
                 </div>
                 <div class="row">
-                  <label for="north-ratio">정북 10m 초과 ×H</label>
+                  <label for="north-mid-m" title="서울시 조례 제35조①: 높이 10m 초과 17m 이하 부분 5m — 0이면 단계 없음">정북 10~17m 이격(m)</label>
+                  <input type="number" id="north-mid-m" value="0" step="0.5" min="0" max="20" />
+                </div>
+                <div class="row">
+                  <label for="north-ratio">정북 그 위 ×H</label>
                   <input type="number" id="north-ratio" value="0.5" step="0.05" min="0.1" max="2" />
                 </div>
                 <div class="row">
@@ -2108,11 +2112,11 @@
                   <input type="number" id="spacing-window" value="0.5" step="0.05" min="0.1" max="2" />
                 </div>
                 <div class="row">
-                  <label title="남쪽 동이 낮고 주된 개구부가 남향(두 동 축이 남동~남서)인 경우 — 시행령 제86조 제3항 제2호 나목"><input type="checkbox" id="spacing-na" checked /> 나목(남저북고) 적용</label>
+                  <label title="높은 동 기준 낮은 동이 정동~정남~정서(180°)에 있고 높은 동의 마주보는 벽에 창(주된 개구부)이 있는 경우 — 시행령 제86조 제3항 제2호 나목"><input type="checkbox" id="spacing-na" checked /> 나목(남쪽 낮은 동 특례) 적용</label>
                 </div>
                 <div class="row">
-                  <label for="spacing-na-high">나목 높은 동 ×H · 낮은 동 ×H</label>
-                  <span><input type="number" id="spacing-na-high" value="0.4" step="0.05" min="0" max="2" style="width:60px" title="0이면 낮은 동 기준만 (서울시)" />
+                  <label for="spacing-na-high">나목 최소(m) · 낮은 동 ×H</label>
+                  <span><input type="number" id="spacing-na-high" value="10" step="0.5" min="0" max="30" style="width:60px" title="시행령: 10m 이상" />
                   <input type="number" id="spacing-na-low" value="0.5" step="0.05" min="0.1" max="2" style="width:60px" /></span>
                 </div>
                 <div class="row">

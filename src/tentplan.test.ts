@@ -159,6 +159,7 @@ describe("법규 여유", async () => {
     const p = mkProject([slab, tower]);
     p.siteOverlays = [{ layer: "SITE_BOUNDARY", closed: true, points: rect(-40, -40, 120, 60) }];
     p.site.siteAreaM2 = 16000;
+    p.analysis.setbackRules.spacingNaEnabled = false; // 정동~정서는 나목 대상 — 가목 여유만 확인
     const base = { ...defaultTentOptions(16000), target: { kind: "far" as const, value: 500 }, retailM2: 0, amenityPerUnit: 0, minFloors: 5, maxFloors: 40, tierStep: 0, skipSetback: true };
     const strict = await planTentLegal(p, { ...base, spacingTolPct: 0 });
     const loose = await planTentLegal(p, { ...base, spacingTolPct: 20 });

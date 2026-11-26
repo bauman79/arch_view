@@ -16,13 +16,15 @@ import { edgeHasWindow } from "./windows";
  *
  * 마주보는 벽면 쌍의 적용 기준:
  *   - 가목: 어느 한쪽이라도 채광창 있는 벽면 → 이격 ≥ spacingRatioWindow × 높은 동 높이
- *     (시행령 하한 0.5배, 서울시 조례 0.8배)
+ *     (시행령 하한 0.5배, 서울시 조례 제35조④도 0.5배 — 2022.10.17. 0.8배에서 개정)
+ *   - 나목: 높은 동 기준 낮은 동이 정동~정남~정서(180°)에 있고 높은 동의 마주보는 벽에 창 →
+ *     max(10m, 낮은 동 높이 × 0.5)
  *   - 라목: 채광창 없는 벽면 ↔ 측벽 → 8m 이상 (창없는 벽면끼리도 보수적으로 이 값 적용)
  *   - 마목: 측벽 ↔ 측벽 → 4m 이상
  *   측벽 = 동의 최소 외접 사각형 단변과 나란한 벽(장축과 60° 넘게 꺾인 벽). 측벽에 창 표시가
  *   있어도 채광창 벽면(가목)으로 보지 않는다 — 측벽은 라·마목(8m·4m)만 적용.
  *   정사각형에 가까운 탑상형(장/단변 < 1.3)은 장축이 없으므로 창 표시 없는 벽을 측벽으로 본다.
- *   나목(남측 저층·개구부 방향 특례)·다목(부대·복리시설)은 미반영(문서화된 한계).
+ *   다목(부대·복리시설)은 미반영(문서화된 한계).
  *
  * PLAN_WIN 창면 데이터가 없는 동(windowSegments 비어있음)은 하위호환으로 모든 벽을
  * "채광창 있음"으로 간주한다(보수적 — 가목 적용).
@@ -417,6 +419,9 @@ function centroidOf(fp: Point2[]): Point2 {
 
 export interface NaRule {
   enabled: boolean;
+  /** 나목 최소 이격 (m) — 현행 시행령 10m */
+  minM: number;
+  /** 옛 규정(높은 동 0.4배) 값 — 현행 규정에 없어 계산에 쓰지 않는다 */
   high: number;
   low: number;
   /** 진남 방향 (도면 좌표 단위벡터) */
@@ -437,19 +442,27 @@ function ruleFor(
 ): { rule: SpacingRule; required: number } {
   const winSrc = src.edgeWin[i];
   const winTgt = tgt.edgeWin[j];
+  // 가목의 "건축물 높이"는 마주보는 두 동 중 높은 동 — 나목이 "가목에도 불구하고 낮은 건축물
+  // 높이"로 완화하는 특례이므로, 가목 기본은 높은 동 기준으로 읽어야 앞뒤가 맞는다.
   const height = Math.max(src.height, tgt.height);
-  // 나목: 마주보는 두 지점을 잇는 축이 남동~남서(정남 ±45°)이고 남쪽 동이 낮으면 — 공동주택 주된
-  // 개구부는 남향으로 본다(벽면별 창 표시 여부와 무관). 요구 거리 = max(높은 동×high, 낮은 동×low)
-  if (na?.enabled && (winSrc || winTgt)) {
-    const cS = axis?.from ?? centroidOf(src.fp), cT = axis?.to ?? centroidOf(tgt.fp);
-    const dx = cT.x - cS.x, dy = cT.y - cS.y;
-    const L = Math.hypot(dx, dy) || 1;
-    const along = (dx * na.south.x + dy * na.south.y) / L; // src→tgt가 남쪽으로 향하는 정도
-    if (Math.abs(along) >= Math.SQRT1_2 - 1e-9) {
-      const south = along > 0 ? tgt : src;
-      const north = along > 0 ? src : tgt;
-      if (south.height < north.height) {
-        return { rule: "채광(나목)", required: Math.max(north.height * na.high, south.height * na.low) };
+  // 나목(현행 시행령 제86조③2나, 2021.11.2. 개정): 높은 동을 중심으로 두 동의 축이 시계방향
+  // 정동~정서(남쪽 반원 180°)이고, 높은 동의 주된 개구부(마주보는 벽의 창 PLAN_WIN)가 낮은 동을
+  // 향하면 → 10m 이상이면서 낮은 동 높이 × low 이상. 높은 동 쪽 배율(high)은 현행 규정에 없음(0).
+  if (na?.enabled && src.height !== tgt.height) {
+    const hiIsSrc = src.height > tgt.height;
+    const hiWin = hiIsSrc ? winSrc : winTgt;
+    if (hiWin) {
+      const pS = axis?.from ?? centroidOf(src.fp), pT = axis?.to ?? centroidOf(tgt.fp);
+      const from = hiIsSrc ? pS : pT, to = hiIsSrc ? pT : pS; // 높은 동 → 낮은 동
+      const dx = to.x - from.x, dy = to.y - from.y;
+      const L = Math.hypot(dx, dy) || 1;
+      const along = (dx * na.south.x + dy * na.south.y) / L; // 낮은 동이 남쪽 반원에 있는 정도
+      if (along >= -0.02) { // 정동·정서 포함 (도면 오차 약 1° 허용)
+        const lo = hiIsSrc ? tgt : src;
+        return {
+          rule: "채광(나목)",
+          required: Math.max(na.minM, lo.height * na.low),
+        };
       }
     }
   }
@@ -472,7 +485,8 @@ export function runSpacingCheck(project: Project): SpacingResult {
   const th = (project.site.northAngle * Math.PI) / 180;
   const na: NaRule = {
     enabled: sr.spacingNaEnabled ?? true,
-    high: sr.spacingNaHigh ?? 0.4,
+    minM: sr.spacingNaMinM ?? 10,
+    high: sr.spacingNaHigh ?? 0,
     low: sr.spacingNaLow ?? 0.5,
     south: { x: Math.sin(th), y: -Math.cos(th) }, // 진북 (−sinθ, cosθ)의 반대
   };

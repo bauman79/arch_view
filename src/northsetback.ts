@@ -9,6 +9,8 @@ import { buildingHeight, type Point2, type Project } from "./types";
  * 현행 기준(2023 개정 반영):
  *   - 높이 10m 이하인 부분: 인접대지경계선으로부터 1.5m 이상 이격
  *   - 높이 10m 초과 부분: 인접대지경계선으로부터 해당 부분 높이의 1/2 이상 이격
+ *   ※ 시행령 제86조①은 2026.11.10. 삭제되어 거리 기준이 조례로 넘어갔다. 서울시 조례 제35조①은
+ *     10m 초과 17m 이하 부분 5m 단계를 둔다(northSetbackMidM/MidHeightM).
  * 거리 D에서의 허용높이로 환산하면:
  *   - D < 1.5m          : 건축 불가(허용높이 0)
  *   - D ≥ 1.5m          : 허용높이 = max(10, D ÷ 0.5) = max(10, 2×D)
@@ -63,9 +65,14 @@ export function allowedHeightFromDistance(
   lowM: number,
   lowHeightM: number,
   ratio: number,
+  /** 중간 단계(서울 조례: 10~17m 부분 5m) — midM 이상 떨어지면 midHeightM까지 허용 */
+  midM = 0,
+  midHeightM = 0,
 ): number {
   if (d < lowM - 1e-9) return 0;
-  return Math.max(lowHeightM, d / ratio);
+  let h = Math.max(lowHeightM, d / ratio);
+  if (midM > 0 && midHeightM > lowHeightM && d >= midM - 1e-9) h = Math.max(h, midHeightM);
+  return h;
 }
 
 /** OverlayLine을 세그먼트(양 끝점 쌍) 목록으로 펼침 — closed면 마지막→첫점도 포함 */
@@ -153,7 +160,11 @@ export function runNorthSetbackCheck(project: Project): NorthSetbackResult {
 
     const allowedHeight =
       bestDist !== null
-        ? allowedHeightFromDistance(bestDist, lowM, lowHeightM, ratio)
+        ? allowedHeightFromDistance(
+            bestDist, lowM, lowHeightM, ratio,
+            project.analysis.setbackRules.northSetbackMidM ?? 0,
+            project.analysis.setbackRules.northSetbackMidHeightM ?? 0,
+          )
         : null;
     const point =
       bestDist !== null

@@ -1627,13 +1627,19 @@ function syncSetbackRules(): void {
   const r = project.analysis.setbackRules;
   r.northSetbackLowM = Math.max(0, parseFloat(northLowInput.value) || 1.5);
   r.northSetbackRatio = Math.max(0.1, parseFloat(northRatioInput.value) || 0.5);
+  {
+    const v = Math.max(0, parseFloat(northMidInput.value) || 0);
+    r.northSetbackMidM = v;
+    r.northSetbackMidHeightM = v > 0 ? (r.northSetbackMidHeightM || 17) : 0;
+  }
   r.daylightRatio = Math.max(0.1, parseFloat(daylightRatioInput.value) || 2);
   r.daylightRoadParkRatio = Math.max(0.1, parseFloat(daylightRoadParkInput.value) || 2);
   r.spacingRatioWindow = Math.max(0.1, parseFloat(spacingWindowInput.value) || 0.5);
   r.spacingNoWindowM = Math.max(0, parseFloat(spacingNoWindowMInput.value) || 8);
   r.spacingSideM = Math.max(0, parseFloat(spacingSideMInput.value) || 4);
   r.spacingNaEnabled = spacingNaInput.checked;
-  { const v = parseFloat(spacingNaHighInput.value); r.spacingNaHigh = Number.isFinite(v) ? Math.max(0, v) : 0.4; }
+  { const v = parseFloat(spacingNaHighInput.value); r.spacingNaMinM = Number.isFinite(v) ? Math.max(0, v) : 10; }
+  r.spacingNaHigh = 0;
   r.spacingNaLow = Math.max(0.1, parseFloat(spacingNaLowInput.value) || 0.5);
 }
 
@@ -1641,16 +1647,22 @@ function syncSetbackRules(): void {
 function fillSetbackInputs(r: SetbackRules): void {
   northLowInput.value = String(r.northSetbackLowM);
   northRatioInput.value = String(r.northSetbackRatio);
+  northMidInput.value = String(r.northSetbackMidM ?? 0);
   daylightRatioInput.value = String(r.daylightRatio);
   daylightRoadParkInput.value = String(r.daylightRoadParkRatio);
   spacingWindowInput.value = String(r.spacingRatioWindow);
   spacingNoWindowMInput.value = String(r.spacingNoWindowM);
   spacingSideMInput.value = String(r.spacingSideM);
   spacingNaInput.checked = r.spacingNaEnabled ?? true;
-  spacingNaHighInput.value = String(r.spacingNaHigh ?? 0.4);
+  spacingNaHighInput.value = String(r.spacingNaMinM ?? 10);
   spacingNaLowInput.value = String(r.spacingNaLow ?? 0.5);
 }
 const spacingNaInput = document.getElementById("spacing-na") as HTMLInputElement;
+const northMidInput = document.getElementById("north-mid-m") as HTMLInputElement;
+northMidInput.addEventListener("change", () => {
+  syncSetbackRules();
+  updateSetbackChecks();
+});
 const spacingNaHighInput = document.getElementById("spacing-na-high") as HTMLInputElement;
 const spacingNaLowInput = document.getElementById("spacing-na-low") as HTMLInputElement;
 for (const el of [spacingNaInput, spacingNaHighInput, spacingNaLowInput]) {
@@ -1671,7 +1683,7 @@ presetBtn.addEventListener("click", () => {
   updateSetbackChecks();
   setStatus(
     seoulPresetOn
-      ? "서울시 건축조례 적용 — 채광창 벽면 인동거리 0.8배, 남측 동이 낮으면(나목) 낮은 동 높이의 0.5배 (그 외 시행령과 동일)"
+      ? "서울시 건축조례 제35조 적용 — 정북 10m 이하 1.5m · 10~17m 5m · 그 위 H/2, 인동 가목 0.5H · 나목 max(10m, 낮은 동 0.5H)"
       : "건축법 시행령 제86조 기본값으로 복원",
   );
 });

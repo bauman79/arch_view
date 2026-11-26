@@ -357,9 +357,9 @@ describe("인동거리 — 마주보는 벽면 판정 (직각방향 겹침)", ()
     expect(r.checks[0].pass).toBe(false);
   });
 
-  it("배율 변경(서울시 0.8배)이 기준거리에 반영된다", () => {
+  it("배율 변경(조례 0.8배)이 기준거리에 반영된다", () => {
     const p = twoTowers(20, null);
-    p.analysis.setbackRules.spacingRatioWindow = 0.8; // 서울시 조례 → 기준 24m
+    p.analysis.setbackRules.spacingRatioWindow = 0.8; // 조례로 강화한 경우 → 기준 24m
     const r = runSpacingCheck(p);
     expect(r.checks[0].required).toBeCloseTo(24);
     expect(r.checks[0].pass).toBe(false); // 20m < 24m
@@ -555,12 +555,29 @@ describe("인동거리 나목 (남저북고)", async () => {
     const north = mkBuilding("N", "계획주동", rect(0, 36, 40, 46), northFloors, { windowSegments: [[{ x: 5, y: 36 }, { x: 35, y: 36 }]] });
     return mkProject([south, north]);
   };
-  it("남쪽 동이 낮으면 나목 — max(0.4×높은 동, 0.5×낮은 동)", () => {
+  it("남쪽 동이 낮으면 나목 — max(10m, 0.5×낮은 동) (현행 시행령, 높은 동 기준 없음)", () => {
     const r = runSpacingCheck(mk(5, 20)); // 높이 15m / 60m
     const c = r.checks[0];
     expect(c.rule).toBe("채광(나목)");
-    expect(c.required).toBeCloseTo(24, 6);
-    expect(c.pass).toBe(true); // 26m ≥ 24m (가목이면 30m 필요 → 위반)
+    expect(c.required).toBeCloseTo(10, 6); // 0.5×15 = 7.5 < 10m
+    expect(c.pass).toBe(true); // 26m ≥ 10m (가목이면 30m 필요 → 위반)
+    const c2 = runSpacingCheck(mk(10, 20)).checks[0]; // 낮은 동 30m → 15m
+    expect(c2.required).toBeCloseTo(15, 6);
+  });
+  it("정동·정서 배치도 나목 (높은 동 창이 낮은 동을 향함)", () => {
+    // 높은 동 W(x 0~10) 동쪽 벽에 창, 낮은 동 E(x 30~40) — 축이 정동
+    const W = mkBuilding("W", "계획주동", rect(0, 0, 10, 40), 20, { windowSegments: [[{ x: 10, y: 5 }, { x: 10, y: 35 }]] });
+    const E = mkBuilding("E", "계획주동", rect(30, 0, 40, 40), 8, { windowSegments: [[{ x: 30, y: 5 }, { x: 30, y: 35 }]] });
+    const c = runSpacingCheck(mkProject([W, E])).checks[0];
+    expect(c.rule).toBe("채광(나목)");
+    expect(c.required).toBeCloseTo(12, 6); // 0.5 × 24m
+  });
+  it("높은 동의 마주보는 벽에 창이 없으면(주된 개구부 아님) 가목", () => {
+    const south = mkBuilding("S", "계획주동", rect(0, 0, 40, 10), 5, { windowSegments: [[{ x: 5, y: 0 }, { x: 35, y: 0 }], [{ x: 5, y: 10 }, { x: 35, y: 10 }]] });
+    const north = mkBuilding("N", "계획주동", rect(0, 36, 40, 46), 20, { windowSegments: [[{ x: 5, y: 46 }, { x: 35, y: 46 }]] });
+    const c = runSpacingCheck(mkProject([south, north])).checks[0];
+    expect(c.rule).toBe("채광");
+    expect(c.required).toBeCloseTo(30, 6);
   });
   it("남쪽 동이 더 높으면 가목 (0.5×높은 동)", () => {
     const c = runSpacingCheck(mk(20, 5)).checks[0];

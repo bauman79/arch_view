@@ -137,15 +137,16 @@ export interface SetbackRules {
   daylightRoadParkRatio: number;
   /**
    * 인동거리(제86조 제3항 제2호 가목): 채광창 있는 벽면이 마주보는 경우
-   * 이격 ≥ 이 값 × 높은 동 높이. 시행령 하한 0.5배 — 서울시 조례는 0.8배.
+   * 이격 ≥ 이 값 × 높은 동 높이. 시행령 하한 0.5배 — 서울시 조례 제35조④도 0.5배(2022.10.17. 개정).
    */
   spacingRatioWindow: number;
   /**
-   * 인동거리(나목): 마주보는 두 동 중 남쪽 동이 낮고 주된 개구부가 남쪽을 향하는 경우
-   * (두 동의 축이 남동~남서) — 이격 ≥ 높은 동 높이 × spacingNaHigh 이고 ≥ 낮은 동 높이 × spacingNaLow.
-   * 시행령 하한 0.4배·0.5배 (조례로 정하는 거리). 없으면(옛 .view) 0.4·0.5, 켜짐.
+   * 인동거리(나목, 현행 2021.11.2. 개정): 높은 동 중심으로 두 동의 축이 정동~정남~정서이고 높은 동의
+   * 주된 개구부(마주보는 벽의 창)가 낮은 동을 향하는 경우 — 이격 ≥ spacingNaMinM(10m) 이고
+   * ≥ 낮은 동 높이 × spacingNaLow(0.5). spacingNaHigh는 옛 규정(높은 동 0.4배) 호환용 — 현행 0.
    */
   spacingNaHigh?: number;
+  spacingNaMinM?: number;
   spacingNaLow?: number;
   spacingNaEnabled?: boolean;
   /** 인동거리(라목): 채광창 없는 벽면과 측벽이 마주보는 경우 최소 이격(m) — 법정 8m */
@@ -158,6 +159,13 @@ export interface SetbackRules {
   northSetbackLowHeightM: number;
   /** 정북사선(제2호): 기준 높이 초과 부분은 이격 ≥ 이 값 × 각 부분 높이 — 법정 0.5 */
   northSetbackRatio: number;
+  /**
+   * 정북사선 중간 단계 — 높이 northSetbackLowHeightM 초과 ~ northSetbackMidHeightM 이하 부분은
+   * 이격 ≥ northSetbackMidM. 서울시 조례 제35조①(2026.10.1. 개정): 10m 초과 17m 이하 5m.
+   * 0이거나 없으면 중간 단계 없음(바로 높이 × ratio).
+   */
+  northSetbackMidM?: number;
+  northSetbackMidHeightM?: number;
 }
 
 /**
@@ -169,8 +177,9 @@ export function statutorySetbackRules(): SetbackRules {
     daylightRatio: 2.0,
     daylightRoadParkRatio: 2.0,
     spacingRatioWindow: 0.5,
-    spacingNaHigh: 0.4,
+    spacingNaHigh: 0,
     spacingNaLow: 0.5,
+    spacingNaMinM: 10,
     spacingNaEnabled: true,
     spacingNoWindowM: 8,
     spacingSideM: 4,
@@ -181,13 +190,20 @@ export function statutorySetbackRules(): SetbackRules {
 }
 
 /**
- * 프리셋: 서울특별시 건축조례 제60조 — 채광창 있는 벽면이 마주보는 인동거리만
- * 0.8배로 강화(그 밖의 항목은 시행령과 동일). 남측 저층+개구부 남향 특례(0.6/0.8배),
- * 도시형생활주택 0.25배 등 세부 특례는 미반영 — 필요 시 값을 직접 수정.
+ * 프리셋: 서울특별시 건축 조례 제35조 (현행 — 국가법령정보센터 2026.11. 확인).
+ *  - ① 정북: 10m 이하 1.5m / 10m 초과 17m 이하 5m / 17m 초과 높이의 1/2 (2026.10.1. 개정)
+ *  - ④ 인동: 가목 0.5배, 나목 낮은 동 0.5배 (2022.10.17. 0.8배에서 개정) — 나목 최소 10m는 시행령
+ * 단지형다세대 4m·0.25배 등 세부 특례는 미반영 — 필요 시 값을 직접 수정.
  */
 export function seoulSetbackRules(): SetbackRules {
-  // 서울시: 가목 0.8배, 나목은 낮은 동 높이의 0.5배만 (높은 동 기준 없음)
-  return { ...statutorySetbackRules(), spacingRatioWindow: 0.8, spacingNaHigh: 0, spacingNaLow: 0.5 };
+  return {
+    ...statutorySetbackRules(),
+    spacingRatioWindow: 0.5,
+    spacingNaHigh: 0,
+    spacingNaLow: 0.5,
+    northSetbackMidM: 5,
+    northSetbackMidHeightM: 17,
+  };
 }
 
 /** 일조권(수인한도) 판정 기준 — 대법원 판례상 09~15시 연속 2h 또는 08~16시 총 4h */

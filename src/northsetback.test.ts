@@ -85,6 +85,12 @@ describe("allowedHeightFromDistance — 손계산 대조 (제86조 제1항 현�
   it("조례 배율 변경 반영 (ratio=0.4 → D=6에서 15m)", () => {
     expect(allowedHeightFromDistance(6, 1.5, 10, 0.4)).toBeCloseTo(15, 6);
   });
+  it("서울시 조례 3단계(1.5m / 10~17m 5m / H/2)", () => {
+    expect(allowedHeightFromDistance(4.9, 1.5, 10, 0.5, 5, 17)).toBeCloseTo(10, 6);
+    expect(allowedHeightFromDistance(5, 1.5, 10, 0.5, 5, 17)).toBeCloseTo(17, 6);
+    expect(allowedHeightFromDistance(8, 1.5, 10, 0.5, 5, 17)).toBeCloseTo(17, 6);
+    expect(allowedHeightFromDistance(10, 1.5, 10, 0.5, 5, 17)).toBeCloseTo(20, 6);
+  });
 });
 
 describe("runNorthSetbackCheck — 판정", () => {
