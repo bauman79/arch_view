@@ -134,7 +134,7 @@ import { buildReportHtml, type ReportFigure } from "./report";
 import { makeSurface, type DrapeSurface } from "./drape";
 import { diagnoseDxfText, diagnosisHtml, esc } from "./dxfdiag";
 import { findMaxFloors, planTypeOfBuilding, violations, type MaxFloorResult } from "./maxfloors";
-import { defaultTentOptions, legalOptOf, planTentLegal, planTentRuleOnly, unitsPerFloorOf, type TentOptions, type TentResult } from "./tentplan";
+import { defaultTentOptions, legalOptOf, legalReport, planTentLegal, planTentRuleOnly, unitsPerFloorOf, type LegalIssue, type TentOptions, type TentResult } from "./tentplan";
 import { yieldToEventLoop } from "./pv";
 import { createUnitSunModule } from "./unitsun";
 import type { WindDoneMessage, WindRunMessage } from "./wind.worker";
@@ -1149,7 +1149,7 @@ async function runTentPlan(free: boolean): Promise<void> {
     tierStep: num("tp-tier", 5),
     allowRelax: (document.getElementById("tp-relax") as HTMLInputElement).checked,
     skipSetback: (document.getElementById("tp-skipsetback") as HTMLInputElement).checked,
-    spacingTolPct: Math.max(0, Math.min(50, num("tp-tol", 10))),
+    spacingTolPct: Math.max(0, Math.min(50, num("tp-tol", 0))),
   };
   if (o.minFloors > o.maxFloors) o.minFloors = o.maxFloors;
   syncSetbackRules();
@@ -1228,8 +1228,32 @@ async function runTentPlan(free: boolean): Promise<void> {
             `<td><span class="tent-bar${r.capped ? " cap" : ""}" style="width:${Math.round((r.floors / Math.max(1, res.peak)) * 80)}px"></span></td></tr>`,
         )
         .join("") +
-      `</table><p class="hint">높이 점수 = 가운데일수록·북쪽일수록 높음(100이 가장 높은 자리). 형태: 탑상형은 점수대로 높게, 탑에 붙은 날개·떨어진 판상형은 그 비율만큼 낮게. 빨간 막대는 법규 최대 층수로 잘린 동입니다. 연면적은 개략(바닥면적 × 주거층수)입니다.</p>`;
+      `</table><p class="hint">높이 점수 = 가운데일수록·북쪽일수록 높음(100이 가장 높은 자리). 형태: 탑상형은 점수대로 높게, 탑에 붙은 날개·떨어진 판상형은 그 비율만큼 낮게. 빨간 막대는 법규 최대 층수로 잘린 동입니다. 연면적은 개략(면적표를 켜면 공급면적 × 세대수, 아니면 바닥면적 × 주거층수)입니다.</p>`;
     out.insertAdjacentHTML("afterbegin", why);
+    if (!free) {
+      // 법규 그대로(여유 옵션 없이) 최종 점검 — 층수로 풀 수 있는 위반은 0이어야 하고, 남는 것은 배치 문제
+      const floorsMap = new Map(res.rows.map((r) => [r.id, r.floors] as const));
+      const rep = legalReport(project, floorsMap, {});
+      const relaxed = o.skipSetback || (o.spacingTolPct ?? 0) > 0;
+      const list = (xs: LegalIssue[]) =>
+        xs.slice(0, 12).map((x) => `${esc(x.name)}${x.other ? ` ↔ ${esc(x.other)}` : ""} (${esc(x.rule)})`).join(", ") + (xs.length > 12 ? ` 외 ${xs.length - 12}건` : "");
+      let box: string;
+      if (!rep.fixable.length && !rep.layout.length) {
+        box = `<div class="tp-why" style="background:#ecfdf5;border-color:#a7f3d0;color:#065f46"><b>법규 위반 없음</b> — 정북사선·채광사선·인동거리를 모두 만족하는 층수입니다.</div>`;
+      } else {
+        box =
+          `<div class="tp-why">` +
+          (rep.fixable.length
+            ? `<b>여유 옵션 때문에 남는 위반 ${rep.fixable.length}건</b>${relaxed ? "" : ""}: ${list(rep.fixable)}<br>` +
+              `→ "정북·채광사선 상층부 셋백"을 끄고 인동거리 여유를 0%로 하면 위반 없이 배분합니다.<br>`
+            : `<b>층수로 생기는 위반은 없습니다.</b><br>`) +
+          (rep.layout.length
+            ? `<b>층수와 무관한 배치 문제 ${rep.layout.length}건</b> (최소 층수에서도 위반 — 동을 옮기거나 창 위치를 바꿔야 함): ${list(rep.layout)}`
+            : "") +
+          `</div>`;
+      }
+      out.insertAdjacentHTML("afterbegin", box);
+    }
     if (free) {
       const sim = { ...project, buildings: structuredClone(project.buildings) } as typeof project;
       for (const r of res.rows) {

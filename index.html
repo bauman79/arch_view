@@ -2486,8 +2486,8 @@
           <label>탑상형 판정</label><span>바닥 <input type="number" id="tp-tarea" value="400" min="0" step="50" style="width:70px" />㎡ 이상 · 가로세로비 <input type="number" id="tp-tasp" value="1.4" min="1" max="5" step="0.1" style="width:55px" /> 이하</span>
           <label>판상·날개 층수</label><span>탑상형의 <input type="number" id="tp-slab" value="60" min="20" max="100" step="5" style="width:60px" />% <span class="hint">탑에 붙은 작은 동 = 날개</span></span>
           <label>높이 단계</label><span><select id="tp-tier"><option value="0">없음 (층마다)</option><option value="3">3층 단위</option><option value="5" selected>5층 단위</option></select></span>
-          <label>법규 여유 (개략 계획)</label><span><label><input type="checkbox" id="tp-skipsetback" checked /> 정북·채광사선은 상층부 셋백으로 대응 (층수 제한에서 제외)</label><br />
-            인동거리 여유 <input type="number" id="tp-tol" value="10" min="0" max="50" step="5" style="width:55px" />% <span class="hint">기준보다 이만큼 짧아도 허용</span></span>
+          <label>법규 여유 (개략 계획)</label><span><label><input type="checkbox" id="tp-skipsetback" /> 정북·채광사선은 상층부 셋백으로 대응 (층수 제한에서 제외 — <b>켜면 사선 위반이 남음</b>)</label><br />
+            인동거리 여유 <input type="number" id="tp-tol" value="0" min="0" max="50" step="5" style="width:55px" />% <span class="hint">기준보다 이만큼 짧아도 허용 — 0이 아니면 그만큼 위반이 남음</span></span>
           <label>목표 미달 시</label><span><label><input type="checkbox" id="tp-relax" /> 낮은 동을 끌어올려 목표 우선 (스카이라인 규칙 완화)</label></span>
           <label>텐트 곡률</label><span><select id="tp-shape"><option value="0.6">완만(넓게 높음)</option><option value="1" selected>보통</option><option value="1.6">뾰족(가운데만)</option></select></span>
           <label>세대당 바닥면적(㎡)</label><span><input type="number" id="tp-apu" value="110" min="30" max="300" step="5" style="width:70px" /> <span class="hint">평형 구성이 없는 동만</span></span>

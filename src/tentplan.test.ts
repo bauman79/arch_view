@@ -181,3 +181,21 @@ describe("법규 무시 배분", async () => {
     expect(f("P2")).toBeGreaterThan(f("P0"));
   });
 });
+
+describe("법규 반영 배분은 위반이 남지 않는다", async () => {
+  const { planTentLegal, legalReport, defaultTentOptions } = await import("./tentplan");
+  it("기본 옵션(법규 그대로) — 층수로 풀 수 있는 위반 0", async () => {
+    const a = mkBuilding("A", "계획주동", rect(0, 0, 40, 12), 1, { windowSegments: [[{ x: 5, y: 12 }, { x: 35, y: 12 }]] });
+    const b = mkBuilding("B", "계획주동", rect(0, 30, 40, 42), 1, { windowSegments: [[{ x: 5, y: 30 }, { x: 35, y: 30 }]] });
+    const c = mkBuilding("C", "계획주동", rect(60, 0, 75, 15), 1, { windowSegments: [[{ x: 60, y: 5 }, { x: 60, y: 10 }]] });
+    const p = mkProject([a, b, c]);
+    p.siteOverlays = [{ layer: "SITE_BOUNDARY", closed: true, points: rect(-30, -30, 110, 80) }];
+    p.site.siteAreaM2 = 15000;
+    const o = { ...defaultTentOptions(15000), target: { kind: "far" as const, value: 400 }, retailM2: 0, amenityPerUnit: 0, minFloors: 5, maxFloors: 40 };
+    expect(o.skipSetback).toBe(false);
+    expect(o.spacingTolPct).toBe(0);
+    const r = await planTentLegal(p, o);
+    const rep = legalReport(p, new Map(r.rows.map((x) => [x.id, x.floors])), {});
+    expect(rep.fixable).toHaveLength(0);
+  });
+});

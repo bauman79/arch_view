@@ -3,6 +3,7 @@ import { pointInPolygon, polygonPolygonClosest } from "./geom2d";
 import { sitePolygons } from "./groundshadow";
 import { footprintAreaM2, residentialFloorAreaM2 } from "./massing";
 import { violations, type LegalOpt } from "./maxfloors";
+import { runSpacingCheck } from "./spacing";
 import type { Building, Point2, Project } from "./types";
 
 /**
@@ -132,8 +133,9 @@ export function defaultTentOptions(siteAreaM2: number): TentOptions {
     towerMaxAspect: 1.4,
     slabRatio: 0.6,
     tierStep: 5,
-    skipSetback: true,
-    spacingTolPct: 10,
+    // 기본은 법규 그대로 — 여유 옵션은 켜면 그만큼 위반이 남는다
+    skipSetback: false,
+    spacingTolPct: 0,
   };
 }
 
@@ -461,6 +463,93 @@ export interface TentLegalResult extends TentResult {
   relaxedLift: number | null;
 }
 
+export interface LegalIssue {
+  id: string;
+  name: string;
+  rule: string;
+  /** 인동거리 상대 동 이름 */
+  other?: string;
+}
+
+/**
+ * 정한 층수의 법규 점검 — 동마다 위반을 "층수로 풀 수 있는 것"(모두 최소 층수일 때는 없던 위반)과
+ * "배치 문제"(최소 층수에서도 있는 위반: 동 간격 4m·8m·10m 미달, 경계에 너무 붙은 창 등)로 나눈다.
+ */
+export function legalReport(
+  project: Project,
+  floors: Map<string, number>,
+  opt: LegalOpt = {},
+): { fixable: LegalIssue[]; layout: LegalIssue[] } {
+  return legalReporter(project, opt)(floors);
+}
+
+/** 최소 층수 기준(배치 문제)을 한 번만 계산해 두고 층수 배치마다 점검하는 함수 */
+export function legalReporter(
+  project: Project,
+  opt: LegalOpt = {},
+): (floors: Map<string, number>) => { fixable: LegalIssue[]; layout: LegalIssue[] } {
+  const sim = { ...project, buildings: project.buildings.map((b) => ({ ...b })) } as Project;
+  const plans = sim.buildings.filter((b) => b.type === "계획주동");
+  const planSim = { ...sim, buildings: plans } as Project;
+  const nameOf = new Map(plans.map((b) => [b.id, b.name]));
+  const minOf = (b: Building) => Math.max(1, b.pilotiFloors + 1);
+  const tol = Math.min(0.9, Math.max(0, opt.spacingTol ?? 0));
+  // 사선(동 단독) + 인동(전체 한 번) — 키는 동/쌍·기준·위치
+  const collect = () => {
+    const m = new Map<string, LegalIssue>();
+    for (const b of plans) {
+      for (const [k, rule] of violations(sim, b, [], opt)) m.set(`${b.id}|${k}`, { id: b.id, name: b.name, rule });
+    }
+    for (const c of runSpacingCheck(planSim).checks) {
+      if (c.distance >= c.required * (1 - tol) - 1e-9) continue;
+      const key = `S|${c.aId}|${c.bId}|${c.rule}|${((c.pa.x + c.pb.x) / 2).toFixed(1)},${((c.pa.y + c.pb.y) / 2).toFixed(1)}`;
+      m.set(key, { id: c.aId, name: c.aName, rule: "인동거리", other: nameOf.get(c.bId) ?? c.bName });
+    }
+    return m;
+  };
+  for (const b of plans) b.floors = minOf(b);
+  const base = collect();
+  return (floors) => {
+    for (const b of plans) b.floors = floors.get(b.id) ?? minOf(b);
+    const now = collect();
+    const fixable: LegalIssue[] = [];
+    const layout: LegalIssue[] = [];
+    for (const [k, it] of now) (base.has(k) ? layout : fixable).push(it);
+    return { fixable, layout };
+  };
+}
+
+/**
+ * 마지막 안전장치 — 층수로 풀 수 있는 위반이 남아 있으면 그 동(높은 동부터)을 한 층씩 내린다.
+ * 우선순위 맞춤 뒤에도 동끼리 순서 때문에 남는 경우를 없앤다.
+ */
+export function repairFloors(project: Project, floors: Map<string, number>, opt: LegalOpt = {}): Map<string, number> {
+  const out = new Map(floors);
+  const minOf = (b: Building) => Math.max(1, b.pilotiFloors + 1);
+  const byId = new Map(project.buildings.map((b) => [b.id, b]));
+  const report = legalReporter(project, opt);
+  for (let guard = 0; guard < 400; guard++) {
+    const { fixable } = report(out);
+    if (!fixable.length) break;
+    // 걸린 동들 중 가장 높은 동을 한 층 내린다 (인동거리 쌍이면 두 동 중 높은 쪽)
+    const cands = new Set<string>();
+    for (const f of fixable) {
+      cands.add(f.id);
+      if (f.other) {
+        const o = [...byId.values()].find((b) => b.name === f.other);
+        if (o) cands.add(o.id);
+      }
+    }
+    const pick = [...cands]
+      .map((id) => byId.get(id)!)
+      .filter((b) => (out.get(b.id) ?? b.floors) > minOf(b))
+      .sort((a, b) => (out.get(b.id) ?? b.floors) - (out.get(a.id) ?? a.floors))[0];
+    if (!pick) break;
+    out.set(pick.id, (out.get(pick.id) ?? pick.floors) - 1);
+  }
+  return out;
+}
+
 /**
  * 규칙(텐트·남저북고·탑상/판상·단계) + 우선순위 법규 맞춤으로 목표를 채우는 가장 낮은 peak를 찾는다.
  * peak = 최고층 한도에서도 모자라면 낮은 동을 lift까지 끌어올린다(우선순위는 유지).
@@ -474,7 +563,7 @@ export async function planTentLegal(
   const rp = prepareRule(project, o);
   const evalAt = async (peak: number, lift: number) => {
     const want = rp.floorsAt(peak, lift);
-    const got = await legalizeByPriority(project, rp, want, yieldFn, legalOptOf(o));
+    const got = repairFloors(project, await legalizeByPriority(project, rp, want, yieldFn, legalOptOf(o)), legalOptOf(o));
     const m = tentMetrics(project, got, o);
     return { want, got, m, metric: o.target.kind === "units" ? m.units : m.farPct ?? 0 };
   };
