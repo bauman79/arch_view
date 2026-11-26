@@ -409,6 +409,52 @@ function facingCandidates(plans: PlanEntry[], index: EdgeIndex): Map<number, [nu
   return out;
 }
 
+/**
+ * 두 외곽선이 붙어 있는지(벽을 맞댔거나 모서리·벽이 닿음) — 외곽선 사이 최단거리가 tol(5cm) 이하.
+ * 손으로 그린 도면은 맞댄 벽이 미세하게 어긋나거나(수 mm) 살짝 겹치기도 해서 거리로 판정한다.
+ */
+export function sharesWall(a: Point2[], b: Point2[], tol = 0.05): boolean {
+  const box = (p: Point2[]) => [
+    Math.min(...p.map((q) => q.x)), Math.min(...p.map((q) => q.y)),
+    Math.max(...p.map((q) => q.x)), Math.max(...p.map((q) => q.y)),
+  ];
+  const [ax0, ay0, ax1, ay1] = box(a);
+  const [bx0, by0, bx1, by1] = box(b);
+  if (ax0 > bx1 + tol || bx0 > ax1 + tol || ay0 > by1 + tol || by0 > ay1 + tol) return false;
+  for (let i = 0; i < a.length; i++) {
+    const p1 = a[i], p2 = a[(i + 1) % a.length];
+    for (let j = 0; j < b.length; j++) {
+      if (segSegDist(p1, p2, b[j], b[(j + 1) % b.length]) <= tol) return true;
+    }
+  }
+  return false;
+}
+
+function bboxOf(p: Point2[]): [number, number, number, number] {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const q of p) {
+    if (q.x < x0) x0 = q.x;
+    if (q.x > x1) x1 = q.x;
+    if (q.y < y0) y0 = q.y;
+    if (q.y > y1) y1 = q.y;
+  }
+  return [x0, y0, x1, y1];
+}
+
+function ptSegDist(p: Point2, a: Point2, b: Point2): number {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const L2 = dx * dx + dy * dy;
+  const t = L2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / L2)) : 0;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+function segSegDist(a: Point2, b: Point2, c: Point2, d: Point2): number {
+  const cross = (o: Point2, p: Point2, q: Point2) => (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+  const d1 = cross(a, b, c), d2 = cross(a, b, d), d3 = cross(c, d, a), d4 = cross(c, d, b);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0;
+  return Math.min(ptSegDist(a, c, d), ptSegDist(b, c, d), ptSegDist(c, a, b), ptSegDist(d, a, b));
+}
+
 /** 벽면 쌍의 적용 기준과 요구 이격거리 */
 function centroidOf(fp: Point2[]): Point2 {
   return {
@@ -504,11 +550,24 @@ export function runSpacingCheck(project: Project): SpacingResult {
       const A = plans[ai];
       const B = plans[bi];
 
-      // 평면상 겹침(포함 포함) — 이격 0으로 즉시 위반
-      if (
-        pointInPolygon(A.fp[0].x, A.fp[0].y, B.fp) ||
-        pointInPolygon(B.fp[0].x, B.fp[0].y, A.fp)
-      ) {
+      // 평면상 겹침(포함 포함) — 이격 0으로 즉시 위반. 맞댄 벽의 수 mm 어긋남은 겹침으로 보지 않는다
+      // 외곽선 변을 0.5m 간격으로 짚어 상대 동 안쪽 깊이(5cm 넘게) 들어간 점이 있으면 겹침
+      const deepIn = (P: Point2[], Q: Point2[]) =>
+        P.some((v, k) => {
+          const w = P[(k + 1) % P.length];
+          const n = Math.max(1, Math.ceil(Math.hypot(w.x - v.x, w.y - v.y) / 0.5));
+          for (let t = 0; t < n; t++) {
+            const x = v.x + ((w.x - v.x) * t) / n, y = v.y + ((w.y - v.y) * t) / n;
+            if (pointInPolygon(x, y, Q) && Q.every((q, j) => ptSegDist({ x, y }, q, Q[(j + 1) % Q.length]) > 0.05)) return true;
+          }
+          return false;
+        });
+      const bbA = bboxOf(A.fp), bbB = bboxOf(B.fp);
+      const near = !(bbA[0] > bbB[2] + 0.05 || bbB[0] > bbA[2] + 0.05 || bbA[1] > bbB[3] + 0.05 || bbB[1] > bbA[3] + 0.05);
+      const overlapping = near && (deepIn(A.fp, B.fp) || deepIn(B.fp, A.fp));
+      // 벽을 맞대 붙은 두 동(동별 층수만 다른 한 건물)은 서로 인동거리 대상이 아니다
+      if (near && !overlapping && sharesWall(A.fp, B.fp)) continue;
+      if (overlapping) {
         const height = Math.max(A.height, B.height);
         checks.push({
           aId: A.id,

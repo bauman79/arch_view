@@ -650,3 +650,26 @@ describe("한 레이어에 모든 주동 — 평형 구성을 타입으로", () 
     expect(r.buildings.map((b) => planTypeOfBuilding(b)).sort()).toEqual(["A", "B"]);
   });
 });
+
+describe("벽 맞댄 두 동 — 유니트가 든 외곽선은 동별로", () => {
+  it("PLAN 외곽선 두 개가 벽을 맞대도 각각 유니트가 있으면 2동, 코어 돌출부는 붙은 동에 합친다", () => {
+    const text = dxfText({
+      entities:
+        rectEntity("PLAN_G_5", 0, 0, 20000, 12000) +
+        rectEntity("PLAN_G_5", 20000, 0, 40000, 12000) +
+        rectEntity("PLAN_G_5", 5000, 12000, 10000, 16000) + // 왼쪽 동 코어 돌출(유니트 없음)
+        rectEntity("UNIT_84", 0, 0, 10000, 12000) +
+        rectEntity("UNIT_84", 20000, 0, 30000, 12000),
+    });
+    const r = parseDxfBuildings(text, "mm");
+    expect(r.buildings).toHaveLength(2);
+    const areas = r.buildings.map((b) => Math.round(Math.abs(signedArea(b.footprint)))).sort((x, y) => x - y);
+    expect(areas).toEqual([240, 260]); // 240 + 코어 20
+  });
+  it("유니트 정보가 없으면 기존처럼 맞댄 조각을 한 동으로", () => {
+    const text = dxfText({
+      entities: rectEntity("PLAN_A_1", 0, 0, 20000, 12000) + rectEntity("PLAN_A_1", 20000, 0, 25000, 12000),
+    });
+    expect(parseDxfBuildings(text, "mm").buildings).toHaveLength(1);
+  });
+});

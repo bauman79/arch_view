@@ -591,3 +591,21 @@ describe("인동거리 나목 (남저북고)", async () => {
     expect(runSpacingCheck(p).checks[0].rule).toBe("채광");
   });
 });
+
+describe("벽을 맞대 붙은 두 동", async () => {
+  const { runSpacingCheck, sharesWall } = await import("./spacing");
+  const { mkBuilding, mkProject, rect } = await import("./testutil");
+  it("맞댄 벽(수 mm 어긋남 포함)은 인동거리 검토 쌍에서 뺀다", () => {
+    const a = mkBuilding("A", "계획주동", rect(0, 0, 20, 12), 15);
+    const b = mkBuilding("B", "계획주동", rect(20.003, 0, 40, 12), 25);
+    expect(sharesWall(a.footprint, b.footprint)).toBe(true);
+    expect(runSpacingCheck(mkProject([a, b])).checks).toHaveLength(0);
+  });
+  it("실제로 겹치면 여전히 위반", () => {
+    const a = mkBuilding("A", "계획주동", rect(0, 0, 20, 12), 15);
+    const b = mkBuilding("B", "계획주동", rect(15, 0, 35, 12), 15);
+    const c = runSpacingCheck(mkProject([a, b])).checks;
+    expect(c).toHaveLength(1);
+    expect(c[0].pass).toBe(false);
+  });
+});

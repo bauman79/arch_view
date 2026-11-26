@@ -259,6 +259,8 @@ export function unitSourceLabel(source: UnitSource): string {
 function mergeAdjacentBuildingPolylines(
   polylines: RawPolyline[],
   warnings: string[],
+  /** 세대 유니트(UNIT_) 중심점 — 이것이 든 외곽선은 "독립된 동"이라 서로 합치지 않는다 */
+  unitCentroids: Point2[] = [],
 ): RawPolyline[] {
   const order: string[] = [];
   const byLayer = new Map<string, RawPolyline[]>();
@@ -281,7 +283,7 @@ function mergeAdjacentBuildingPolylines(
       out.push(...list);
       continue;
     }
-    const result = unionAdjacentPolygons(list.map((p) => p.vertices));
+    const result = splitAttachedBodies(list.map((p) => p.vertices), unitCentroids, layer, warnings);
     for (const f of result.failures) warnings.push(`${layer} — ${f}`);
 
     const mergedGroups = result.sources.filter((s) => s.length > 1);
@@ -296,6 +298,60 @@ function mergeAdjacentBuildingPolylines(
     for (const poly of result.polygons) {
       out.push({ layer, vertices: poly, closed: true });
     }
+  }
+  return out;
+}
+
+/**
+ * 벽 맞댄 폴리곤 합치기 — 단, 세대 유니트(UNIT_)가 든 외곽선(= 동 하나 전체를 그린 것)이 둘 이상
+ * 맞붙은 덩어리는 **동별로 나눈다**(붙어 있는 두 동 — 동마다 층수를 따로 줄 수 있어야 한다).
+ * 유니트가 없는 조각(코어 돌출부 등)은 벽을 맞댄 동에 붙인다. 유니트 정보가 없으면 기존처럼 전부 합친다.
+ */
+function splitAttachedBodies(
+  polys: Point2[][],
+  unitCentroids: Point2[],
+  layer: string,
+  warnings: string[],
+): { polygons: Point2[][]; sources: number[][]; failures: string[] } {
+  const whole = unionAdjacentPolygons(polys);
+  if (unitCentroids.length === 0) return whole;
+  const isBody = polys.map((p) => unitCentroids.some((c) => pointInPolygon(c.x, c.y, p)));
+  const out = { polygons: [] as Point2[][], sources: [] as number[][], failures: [...whole.failures] };
+  let split = 0;
+  whole.sources.forEach((src, gi) => {
+    const bodies = src.filter((k) => isBody[k]);
+    if (bodies.length <= 1) {
+      out.polygons.push(whole.polygons[gi]);
+      out.sources.push(src);
+      return;
+    }
+    // 동마다 따로: 유니트 없는 조각은 벽을 맞댄 동(또는 이미 붙은 조각)에 붙인다
+    const sets = bodies.map((b) => [b]);
+    let rest = src.filter((k) => !isBody[k]);
+    for (let changed = true; changed && rest.length; ) {
+      changed = false;
+      rest = rest.filter((k) => {
+        const s = sets.find((set) => unionAdjacentPolygons(set.concat(k).map((i) => polys[i])).polygons.length === 1);
+        if (!s) return true;
+        s.push(k);
+        changed = true;
+        return false;
+      });
+    }
+    for (const k of rest) sets.push([k]); // 어느 동에도 안 붙는 조각은 따로
+    for (const set of sets) {
+      const u = unionAdjacentPolygons(set.map((i) => polys[i]));
+      u.polygons.forEach((poly, j) => {
+        out.polygons.push(poly);
+        out.sources.push(u.sources[j].map((x) => set[x]));
+      });
+    }
+    split += bodies.length;
+  });
+  if (split > 0) {
+    warnings.push(
+      `${layer} 레이어에서 벽을 맞댄 동 ${split}개를 동별로 나눴습니다 (세대 유니트가 든 외곽선 = 독립된 동 — 층수를 따로 줄 수 있음)`,
+    );
   }
   return out;
 }
@@ -572,7 +628,11 @@ export function parseDxfBuildings(
 
   // 유니트·코어가 따로 그려진 동평면을 한 동으로 묶는다.
   // "같은 레이어에 떨어진 폴리곤 여러 개"(= 같은 타입 여러 동 배치)는 건드리지 않는다.
-  const mergedPolylines = mergeAdjacentBuildingPolylines(polylines, warnings);
+  const mergedPolylines = mergeAdjacentBuildingPolylines(
+    polylines,
+    warnings,
+    unitPolys.map((u) => polygonCentroid(u.points)),
+  );
   mergedPolylines.push(...assembleUnitCoreBuildings(polylines, unitPolys, corePolys, warnings));
 
   const buildings: Building[] = [];
